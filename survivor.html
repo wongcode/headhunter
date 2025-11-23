@@ -1,0 +1,2100 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Headhunter: The Infinite Pipeline</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/tsparticles@3.7.1/tsparticles.bundle.min.js" crossorigin="anonymous"></script>
+    <style>
+        body {
+            margin: 0;
+            overflow: hidden;
+            background-color: #262626;
+            touch-action: none; /* Prevent pull-to-refresh on mobile */
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+        }
+        canvas {
+            display: block;
+        }
+        #ui-layer {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            pointer-events: none;
+            z-index: 5;
+        }
+        .pointer-events-auto {
+            pointer-events: auto;
+        }
+        #ts-lightning-layer {
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            pointer-events: none;
+            z-index: 3;
+        }
+        #ts-lightning-layer canvas {
+            background: transparent !important;
+            width: 100% !important;
+            height: 100% !important;
+            pointer-events: none !important;
+        }
+        /* CRT Scanline effect overlay */
+        .scanlines {
+            background: linear-gradient(
+                to bottom,
+                rgba(255,255,255,0),
+                rgba(255,255,255,0) 50%,
+                rgba(0,0,0,0.1) 50%,
+                rgba(0,0,0,0.1)
+            );
+            background-size: 100% 4px;
+            position: absolute;
+            top: 0; left: 0; right: 0; bottom: 0;
+            z-index: 10;
+            pointer-events: none;
+        }
+        .card-hover:hover {
+            transform: translateY(-4px);
+            box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.3);
+        }
+        .flash-red {
+            animation: flashRed 0.2s ease-in-out;
+        }
+        @keyframes flashRed {
+            0%, 100% { background-color: rgba(255, 0, 0, 0); }
+            50% { background-color: rgba(255, 0, 0, 0.3); }
+        }
+        .flash-green {
+            animation: flashGreen 0.2s ease-in-out;
+        }
+        @keyframes flashGreen {
+            0%, 100% { background-color: rgba(0, 255, 0, 0); }
+            50% { background-color: rgba(0, 255, 0, 0.2); }
+        }
+    </style>
+</head>
+<body class="text-white">
+
+    <!-- Game Canvas -->
+    <canvas id="gameCanvas"></canvas>
+    <div id="damage-overlay" class="absolute inset-0 pointer-events-none"></div>
+    <div class="scanlines"></div>
+    <div id="ts-lightning-layer" class="absolute inset-0 pointer-events-none"></div>
+    <div id="pause-overlay" class="hidden absolute inset-0 bg-black/70 flex flex-col items-center justify-center text-center text-white z-20 pointer-events-none">
+        <div class="text-4xl font-bold mb-2">Paused</div>
+        <div class="text-sm text-gray-300">Press ESC to resume</div>
+    </div>
+
+    <!-- UI Layer -->
+    <div id="ui-layer" class="flex flex-col justify-between p-2 md:p-4">
+        
+        <!-- HUD -->
+        <div id="hud" class="hidden flex justify-between items-start w-full pointer-events-none">
+            <div class="flex flex-col gap-1 md:gap-2 max-w-full md:max-w-md w-full md:w-auto">
+                <!-- Sanity Bar -->
+                <div class="w-32 md:w-48 h-4 md:h-6 bg-gray-800 border-2 border-gray-600 rounded relative shadow-lg">
+                    <div id="hp-bar" class="h-full bg-red-500 transition-all duration-200" style="width: 100%;"></div>
+                    <span class="absolute inset-0 flex items-center justify-center text-[8px] md:text-xs font-bold text-white drop-shadow-md">SANITY</span>
+                </div>
+                <!-- XP Bar -->
+                <div class="w-32 md:w-48 h-2 md:h-4 bg-gray-800 border border-gray-600 rounded relative mt-0 md:mt-1 shadow-lg">
+                    <div id="xp-bar" class="h-full bg-blue-400 transition-all duration-200" style="width: 0%;"></div>
+                </div>
+                
+                <!-- Info Panel - Squished on mobile -->
+                <div class="bg-black/60 p-1 md:p-2 rounded border border-gray-700 backdrop-blur-sm mt-1 md:mt-2 text-[9px] md:text-xs font-mono w-fit md:w-full">
+                    <div class="text-green-400 mb-0 md:mb-1 font-bold flex justify-between items-center">
+                        <span>Lvl: <span id="level-display">1</span></span>
+                    </div>
+                    
+                    <!-- Weapons Grid -->
+                    <div class="mb-1 md:mb-2 flex items-center gap-2">
+                        <div class="text-gray-400 uppercase tracking-wider text-[8px] md:text-[10px] hidden md:block">Toolkit</div>
+                        <div id="weapon-grid" class="flex flex-wrap gap-1">
+                            <!-- Injected JS -->
+                        </div>
+                    </div>
+
+                    <!-- Stats Grid - Expanded for more stats -->
+                    <div>
+                        <div class="text-gray-400 uppercase tracking-wider text-[8px] md:text-[10px] mb-0 md:mb-1 hidden md:block">Metrics</div>
+                        <!-- 6 Columns to fit everything -->
+                        <div class="grid grid-cols-6 md:grid-cols-3 gap-x-1 md:gap-x-4 gap-y-0 md:gap-y-1 text-gray-300 leading-tight">
+                            <div>SPD: <span id="stat-speed" class="text-white"></span></div>
+                            <div>DMG: <span id="stat-dmg" class="text-white"></span></div>
+                            <div>AREA: <span id="stat-area" class="text-white"></span></div>
+                            <div>CDR: <span id="stat-cdr" class="text-white"></span></div>
+                            <div>RNG: <span id="stat-range" class="text-white"></span></div>
+                            <div>DIFF: <span id="stat-diff" class="text-white"></span></div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="text-right font-mono">
+                <div class="text-xl md:text-2xl font-bold text-yellow-400 drop-shadow-md" id="timer">00:00</div>
+                <div class="text-xs md:text-sm text-gray-400 drop-shadow-md">Kills: <span id="kill-count">0</span></div>
+            </div>
+        </div>
+
+        <!-- Boss HUD -->
+        <div id="boss-hud" class="hidden absolute top-8 md:top-4 left-1/2 transform -translate-x-1/2 w-3/4 md:w-1/2 pointer-events-none z-20">
+            <div id="boss-name" class="text-center text-purple-400 font-bold text-sm md:text-xl mb-1 drop-shadow-[0_2px_2px_rgba(0,0,0,0.8)] tracking-widest uppercase">BOSS NAME</div>
+            <div class="w-full h-4 md:h-8 bg-gray-900 border-2 md:border-4 border-purple-900 rounded relative shadow-2xl overflow-hidden">
+                <div id="boss-hp-bar" class="h-full bg-gradient-to-r from-purple-700 to-purple-500 transition-all duration-200" style="width: 100%;"></div>
+            </div>
+        </div>
+
+        <!-- Start Screen -->
+        <div id="start-screen" class="absolute inset-0 flex items-center justify-center bg-black/80 backdrop-blur-sm pointer-events-auto z-50">
+            <div class="text-center max-w-md p-8 border-2 border-blue-500 bg-gray-900 rounded-lg shadow-2xl">
+                <h1 class="text-5xl font-bold mb-2 text-transparent bg-clip-text bg-gradient-to-r from-blue-400 to-purple-500">HEADHUNTER</h1>
+                <h2 class="text-xl text-gray-300 mb-6">The Infinite Pipeline</h2>
+                <p class="mb-6 text-gray-400">Survive the massive talent pool. Climb the corporate ladder.</p>
+                
+                <div class="flex flex-col gap-2 mb-6 text-sm text-left bg-gray-800 p-4 rounded">
+                    <p>🎮 <strong>WASD / Arrows</strong> or <strong>Touch Drag</strong> to Move</p>
+                    <p>⚔️ Attacks are <strong>Automatic</strong></p>
+                    <p>💎 Collect <strong>Resumes</strong> to Level Up</p>
+                    <p>👹 Defeat the <strong>Angel Investor</strong> to Win</p>
+                </div>
+
+                <button onclick="startGame()" class="px-8 py-3 bg-blue-600 hover:bg-blue-500 text-white font-bold rounded text-lg transition transform active:scale-95 shadow-[0_0_15px_rgba(37,99,235,0.5)]">
+                    OPEN REQUISITION
+                </button>
+            </div>
+        </div>
+
+        <!-- Level Up Modal -->
+        <div id="upgrade-screen" class="hidden absolute inset-0 flex items-center justify-center bg-black/90 z-40 pointer-events-auto">
+            <div class="w-full max-w-2xl p-6 bg-gray-900/80 rounded-xl border border-gray-700 backdrop-blur-md shadow-2xl">
+                <h2 class="text-3xl font-bold text-center mb-2 text-yellow-400">PROMOTION AVAILABLE!</h2>
+                <p class="text-center text-gray-400 mb-8">Choose a new skill for your toolkit <span class="text-xs opacity-60 block mt-1">(Use Arrow Keys / WASD to Select, Space/Enter to Confirm)</span></p>
+                
+                <div id="upgrade-container" class="grid grid-cols-1 md:grid-cols-3 gap-4">
+                    <!-- Cards injected via JS -->
+                </div>
+            </div>
+        </div>
+
+        <!-- Game Over Screen -->
+        <div id="game-over-screen" class="hidden absolute inset-0 flex items-center justify-center bg-red-900/90 z-50 pointer-events-auto">
+            <div class="text-center p-8 bg-black border-4 border-red-600 rounded-lg shadow-2xl max-w-lg w-full">
+                <h2 class="text-6xl font-bold text-red-500 mb-2">FIRED</h2>
+                <p class="text-xl text-white mb-6">Your performance review is in.</p>
+                
+                <!-- Static Termination Reason Area -->
+                <div id="termination-letter" class="bg-white text-black p-4 rounded text-left font-mono text-sm mb-6 flex flex-col">
+                    <div class="border-b border-gray-300 pb-2 mb-2 font-bold uppercase tracking-widest text-xs text-gray-500">HR Dept. Termination Notice</div>
+                    <div id="static-text-content" class="italic text-gray-800">
+                        <!-- Content injected via JS -->
+                    </div>
+                </div>
+
+                <div class="text-2xl font-mono mb-8 space-y-2">
+                    <div>Time Survived: <span id="final-time" class="text-yellow-400 font-bold">00:00</span></div>
+                    <div>Candidates Rejected: <span id="final-kills" class="text-red-400 font-bold">0</span></div>
+                </div>
+                <button onclick="location.reload()" class="px-8 py-3 bg-white text-red-900 font-bold rounded text-lg hover:bg-gray-200 transition">
+                    APPLY AGAIN
+                </button>
+            </div>
+        </div>
+
+        <!-- Win Screen -->
+        <div id="win-screen" class="hidden absolute inset-0 flex items-center justify-center bg-green-900/90 z-50 pointer-events-auto">
+            <div class="text-center p-8 bg-black border-4 border-green-500 rounded-lg shadow-2xl max-w-lg w-full">
+                <h2 class="text-5xl font-bold text-green-400 mb-2">OFFER ACCEPTED</h2>
+                <p class="text-xl text-white mb-6">You have acquired 100% of the market.</p>
+                <div class="text-6xl mb-6">🤝</div>
+                <div class="text-2xl font-mono mb-8 space-y-2">
+                    <div>Time: <span id="win-time" class="text-yellow-400 font-bold">00:00</span></div>
+                    <div>Rejections: <span id="win-kills" class="text-white font-bold">0</span></div>
+                </div>
+                <button onclick="location.reload()" class="px-8 py-3 bg-white text-green-900 font-bold rounded text-lg hover:bg-gray-200 transition">
+                    START NEW QUARTER
+                </button>
+            </div>
+        </div>
+        
+        <!-- Mobile Joystick Hint -->
+        <div id="mobile-hint" class="absolute bottom-10 left-0 w-full text-center text-gray-500 opacity-50 text-sm pointer-events-none hidden md:hidden">
+            Drag anywhere to move
+        </div>
+    </div>
+
+    <script>
+        /**
+         * GAME CONFIGURATION & STATE
+         */
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d');
+        
+        // World Dimensions
+        const WORLD_WIDTH = 4000;
+        const WORLD_HEIGHT = 4000;
+        
+        // Global ID Counter for safe collision tracking
+        let GLOBAL_ID = 0;
+
+        // Game State
+        let gameState = 'START'; // START, PLAYING, PAUSED, GAMEOVER, WIN
+        let lastTime = 0;
+        let timer = 0;
+        let animationId;
+        let score = 0;
+        let frameCount = 0; // Still useful for some modulos, but we prefer time-based
+        let bossSpawned = false; 
+
+        // Boss System
+        let currentBossTier = 0;
+        const BOSS_TIERS = [
+            { name: "The Manager", emoji: "😠", color: "#f87171" }, // Red
+            { name: "The Director", emoji: "🧐", color: "#fbbf24" }, // Amber
+            { name: "The VP", emoji: "💼", color: "#34d399" }, // Emerald
+            { name: "The CEO", emoji: "👹", color: "#9333ea" }, // Purple
+            { name: "The Board Member", emoji: "🏛️", color: "#2563eb" }, // Blue
+            { name: "The Angel Investor", emoji: "💸", color: "#facc15" } // Gold (Final)
+        ];
+
+        // Camera
+        let camera = { x: 0, y: 0, shake: 0 };
+        
+        // Inputs
+        const keys = { w: false, a: false, s: false, d: false, ArrowUp: false, ArrowLeft: false, ArrowDown: false, ArrowRight: false };
+        const touchInput = { active: false, startX: 0, startY: 0, currX: 0, currY: 0, dx: 0, dy: 0 };
+
+        // Upgrade System State
+        let upgradeOptions = [];
+        let selectedUpgradeIndex = 0;
+
+        // Game Objects
+        let player;
+        let enemies = [];
+        let projectiles = [];
+        let gems = []; 
+        let damageNumbers = []; // Now stores {val, x, y, creationTime, duration, color}
+        let particles = [];
+        let lightnings = []; 
+        let activeMiniLightnings = 0;
+        let tsLightningContainer = null;
+        let manualPause = false;
+        let lingeringSparks = []; 
+        let pulseWaves = [];
+
+        const MAX_ACTIVE_MINI_LIGHTNINGS = 24;
+
+        // Termination Reasons
+        const TERMINATION_REASONS = [
+            "We felt you weren't aligned with our core value of 'Synergistic Hustle'.",
+            "You failed to circle back on the low-hanging fruit.",
+            "We are pivoting to a more AI-driven recruitment strategy (cheaper).",
+            "Your bandwidth was insufficient for the Q3 deliverables.",
+            "We found a candidate who can do your job for exposure.",
+            "You didn't 'Reply All' to the birthday email chain.",
+            "Culturally, you're just not a 'Rockstar Ninja Guru' fit.",
+            "We are rightsizing the human capital department effective immediately.",
+            "You spent too much time reading resumes and not enough time 'networking'.",
+            "The hiring manager ghosted us, so we are ghosting you."
+        ];
+
+        // Upgrade Pool - CLEANED DESCRIPTIONS + ADDED lvl2Text PROPERTY
+        const UPGRADES = [
+            { id: 'email', name: 'Cold Email', type: 'WEAPON', desc: 'Fires rapid rejection emails at nearest candidate.', lvl2Text: 'Lvl 2 Perk: Reply All Splash Damage', icon: '📧' },
+            { id: 'aura', name: 'Networking Aura', type: 'WEAPON', desc: 'Damages anyone getting too close to your network.', lvl2Text: 'Lvl 2 Perk: Slows Enemies', icon: '🌐' },
+            { id: 'offer', name: 'The Offer', type: 'WEAPON', desc: 'Slow moving, high damage projectile that pierces.', lvl2Text: 'Lvl 2 Perk: Stuns Enemies', icon: '💼' },
+            { id: 'referral', name: 'Referral Chain', type: 'WEAPON', desc: 'Arcs of lightning that bounce between candidates.', lvl2Text: 'Lvl 2 Perk: Ground Sparks', icon: '⚡' }, 
+            { id: 'coffee', name: 'Caffeine IV', type: 'PASSIVE', stat: 'speed', val: 0.05, desc: 'Move faster.', icon: '☕' },
+            { id: 'linkedin', name: 'Premium Sub', type: 'PASSIVE', stat: 'pickupRange', val: 50, desc: 'Gather resumes from further away.', icon: '🔗' },
+            { id: 'budget', name: 'Hiring Budget', type: 'PASSIVE', stat: 'damageMult', val: 0.1, desc: 'Increase all damage by 10%.', icon: '💰' },
+            { id: 'ats', name: 'ATS Filter', type: 'PASSIVE', stat: 'cooldownMult', val: -0.1, desc: 'Attack faster.', icon: '🤖' },
+            { id: 'bigdata', name: 'Big Data', type: 'PASSIVE', stat: 'areaMult', val: 0.2, desc: 'Increase size of projectiles and effects by 20%.', icon: '💾' },
+            { id: 'growth', name: 'Hypergrowth', type: 'PASSIVE', stat: 'difficultyMult', val: 0.05, desc: 'Increase enemy spawn rate by 5% (More XP!).', icon: '📈' }
+        ];
+
+        /**
+         * CORE CLASSES
+         */
+
+        class Player {
+            constructor() {
+                this.x = WORLD_WIDTH / 2;
+                this.y = WORLD_HEIGHT / 2;
+                this.radius = 15;
+                
+                // Physics Props - EVEN SLOWER
+                this.vx = 0;
+                this.vy = 0;
+                this.acceleration = 0.25; 
+                this.friction = 0.9; 
+                this.maxSpeed = 2.2; 
+                
+                // Stats
+                this.speed = 1.0; // Multiplier
+                this.maxHp = 100;
+                this.hp = 100;
+                this.level = 1;
+                this.xp = 0;
+                this.xpToNext = 10;
+                this.invincibilityTimer = 0; // I-Frames
+                
+                // Stats modifiers
+                this.pickupRange = 80;
+                this.damageMult = 1;
+                this.cooldownMult = 1;
+                this.areaMult = 1; 
+                this.difficultyMult = 1; 
+
+                // Inventory
+                this.weapons = {
+                    email: { level: 0, cooldown: 0, maxCooldown: 120, damage: 15 }, 
+                    aura: { level: 0, cooldown: 0, maxCooldown: 20, damage: 2, range: 70 }, 
+                    offer: { level: 0, cooldown: 0, maxCooldown: 240, damage: 50, range: 480 },
+                    referral: { level: 0, cooldown: 0, maxCooldown: 160, damage: 25, bounce: 3, range: 200 }
+                };
+
+                // Give starting weapon
+                this.weapons.referral.level = 2;
+            }
+
+            update(timeScale) {
+                // 1. Handle Input -> Acceleration
+                let ax = 0;
+                let ay = 0;
+
+                if (keys.w || keys.ArrowUp) ay -= 1;
+                if (keys.s || keys.ArrowDown) ay += 1;
+                if (keys.a || keys.ArrowLeft) ax -= 1;
+                if (keys.d || keys.ArrowRight) ax += 1;
+
+                if (touchInput.active) {
+                    ax = touchInput.dx;
+                    ay = touchInput.dy;
+                }
+
+                // Normalize input vector
+                if (ax !== 0 || ay !== 0) {
+                    const len = Math.hypot(ax, ay);
+                    if (len > 1) { 
+                        ax /= len;
+                        ay /= len;
+                    }
+                }
+
+                // 2. Apply Acceleration (Scaled by timeScale)
+                const currentAccel = this.acceleration * this.speed;
+                this.vx += ax * currentAccel * timeScale;
+                this.vy += ay * currentAccel * timeScale;
+
+                // 3. Apply Friction (Exponential decay approximation)
+                // v = v * f^timeScale
+                this.vx *= Math.pow(this.friction, timeScale);
+                this.vy *= Math.pow(this.friction, timeScale);
+
+                // 4. Cap Velocity
+                const currentMaxSpeed = this.maxSpeed * this.speed;
+                const velMag = Math.hypot(this.vx, this.vy);
+                if (velMag > currentMaxSpeed) {
+                    this.vx = (this.vx / velMag) * currentMaxSpeed;
+                    this.vy = (this.vy / velMag) * currentMaxSpeed;
+                }
+
+                // 5. Update Position (Velocity is per frame, so scale it)
+                this.x += this.vx * timeScale;
+                this.y += this.vy * timeScale;
+
+                // 6. Stop if very slow
+                if (Math.abs(this.vx) < 0.01) this.vx = 0;
+                if (Math.abs(this.vy) < 0.01) this.vy = 0;
+
+                // 7. Boundaries
+                this.x = Math.max(this.radius, Math.min(WORLD_WIDTH - this.radius, this.x));
+                this.y = Math.max(this.radius, Math.min(WORLD_HEIGHT - this.radius, this.y));
+
+                // 8. Invincibility (Frame based, scale it)
+                if (this.invincibilityTimer > 0) {
+                    this.invincibilityTimer -= timeScale;
+                }
+
+                // Weapon Logic
+                this.handleWeapons(timeScale);
+
+                // XP Collection
+                this.checkPickups(timeScale);
+            }
+
+            checkPickups(timeScale) {
+                for (let i = gems.length - 1; i >= 0; i--) {
+                    // CRITICAL FIX: Stop processing pickups if game paused (e.g. Level Up)
+                    if (gameState !== 'PLAYING') return;
+
+                    const g = gems[i];
+                    const dist = Math.hypot(g.x - this.x, g.y - this.y);
+                    
+                    // Magnetic pull - Normal or Magnetized
+                    if (dist < this.pickupRange || g.magnetized) {
+                        // Speed up closer for normal, constant VERY fast for magnet
+                        const speed = g.magnetized ? 30 : 0.15 * (dist + 10); 
+                        
+                        if (g.magnetized) {
+                            const angle = Math.atan2(this.y - g.y, this.x - g.x);
+                            g.x += Math.cos(angle) * speed * timeScale;
+                            g.y += Math.sin(angle) * speed * timeScale;
+                        } else {
+                            // Classic easing
+                            g.x += (this.x - g.x) * 0.15 * timeScale;
+                            g.y += (this.y - g.y) * 0.15 * timeScale;
+                        }
+                    }
+                    
+                    // Collect
+                    if (dist < this.radius + g.radius) {
+                        if (g.type === 'xp') {
+                            // Base XP increased (Was * 2, now * 2.5)
+                            this.xp += g.val * 2.5;
+                        } else if (g.type === 'pizza') {
+                             this.hp = Math.min(this.maxHp, this.hp + 10);
+                             addDamageNumber("HP +10", this.x, this.y - 30, '#4ade80');
+                             document.getElementById('damage-overlay').classList.add('flash-green');
+                             setTimeout(() => document.getElementById('damage-overlay').classList.remove('flash-green'), 200);
+                        } else if (g.type === 'magnet') {
+                            // Magnetize ALL existing gems
+                            gems.forEach(gem => gem.magnetized = true);
+                            addDamageNumber("MAGNET!", this.x, this.y - 30, '#ffffff');
+                        }
+
+                        gems.splice(i, 1);
+                        
+                        // Multi-level up loop
+                        if (this.xp >= this.xpToNext) {
+                            this.levelUp();
+                        }
+                        updateHUD();
+                    }
+                }
+            }
+
+            levelUp() {
+                this.level++;
+                this.xp -= this.xpToNext; 
+                this.xpToNext = Math.floor(this.xpToNext * 1.5);
+                gameState = 'PAUSED';
+                showUpgrades();
+            }
+
+            upgrade(id) {
+                const up = UPGRADES.find(u => u.id === id);
+                if (up.type === 'WEAPON') {
+                    this.weapons[id].level++;
+                } else {
+                    this[up.stat] += up.val;
+                }
+                this.hp = Math.min(this.maxHp, this.hp + 15);
+                updateHUD();
+            }
+
+            draw() {
+                if (this.weapons.aura.level > 0) {
+                    ctx.beginPath();
+                    // Visual aura size scales with AreaMult
+                    const visualRange = (this.weapons.aura.range + (this.weapons.aura.level * 15)) * this.areaMult;
+                    ctx.arc(this.x, this.y, visualRange, 0, Math.PI * 2);
+                    ctx.strokeStyle = `rgba(0, 255, 255, ${0.2 + (Math.sin(Date.now() / 200) * 0.1)})`;
+                    ctx.lineWidth = 2;
+                    ctx.stroke();
+                }
+                ctx.save();
+                ctx.shadowBlur = 15;
+                ctx.shadowColor = '#3b82f6';
+                ctx.font = "30px Arial";
+                ctx.textAlign = "center";
+                ctx.textBaseline = "middle";
+                if (this.invincibilityTimer > 0 && Math.floor(Date.now() / 50) % 2 === 0) {
+                    ctx.globalAlpha = 0.5;
+                }
+                ctx.fillText("👔", this.x, this.y);
+                ctx.restore();
+            }
+
+            handleWeapons(timeScale) {
+                // 1. Cold Email
+                if (this.weapons.email.level > 0) {
+                    this.weapons.email.cooldown -= timeScale;
+                    if (this.weapons.email.cooldown <= 0) {
+                        const target = getTarget(this.x, this.y, 400, 'nearest');
+                        if (target) {
+                            const cd = Math.max(20, this.weapons.email.maxCooldown * (1 - (this.weapons.email.level * 0.1)) * this.cooldownMult);
+                            this.weapons.email.cooldown = cd;
+                            const dmg = (this.weapons.email.damage + (this.weapons.email.level * 5)) * this.damageMult;
+                            const angle = Math.atan2(target.y - this.y, target.x - this.x);
+                            projectiles.push(new Projectile(this.x, this.y, angle, 'email', dmg));
+                        }
+                    }
+                }
+
+                // 2. Aura (Area Damage + Slow at Lvl 2)
+                if (this.weapons.aura.level > 0) {
+                    this.weapons.aura.cooldown -= timeScale;
+                    if (this.weapons.aura.cooldown <= 0) {
+                        this.weapons.aura.cooldown = 50; 
+                        const range = (this.weapons.aura.range + (this.weapons.aura.level * 15)) * this.areaMult;
+                        const dmg = (this.weapons.aura.damage * this.weapons.aura.level) * this.damageMult;
+
+                        enemies.forEach(enemy => {
+                            const dist = Math.hypot(enemy.x - this.x, enemy.y - this.y);
+                            if (dist < range) {
+                                enemy.takeDamage(dmg, '#2dd4bf', true, 0.1); 
+                                createExplosion(enemy.x, enemy.y, '#00ffff', 1); 
+                                
+                                if (this.weapons.aura.level >= 2) {
+                                    enemy.slowTimer = 180; 
+                                }
+                            }
+                        });
+                    }
+                }
+
+                // 3. The Offer
+                if (this.weapons.offer.level > 0) {
+                    this.weapons.offer.cooldown -= timeScale;
+                    if (this.weapons.offer.cooldown <= 0) {
+                        const cd = Math.max(80, this.weapons.offer.maxCooldown * (1 - (this.weapons.offer.level * 0.15)) * this.cooldownMult);
+                        this.weapons.offer.cooldown = cd;
+                        const dmg = (this.weapons.offer.damage + (this.weapons.offer.level * 15)) * this.damageMult;
+                        const offerRange = this.weapons.offer.range || 600;
+                        const target = getTarget(this.x, this.y, offerRange, 'strongestNearest');
+                        let angle = Math.random() * Math.PI * 2;
+                        
+                        if (target) {
+                            angle = Math.atan2(target.y - this.y, target.x - this.x);
+                        }
+                        projectiles.push(new Projectile(this.x, this.y, angle, 'offer', dmg));
+                    }
+                }
+
+                // 4. Referral Chain
+                if (this.weapons.referral.level > 0) {
+                    this.weapons.referral.cooldown -= timeScale;
+                    if (this.weapons.referral.cooldown <= 0) {
+                        const stats = this.weapons.referral;
+                        const cd = Math.max(40, stats.maxCooldown * (1 - (stats.level * 0.1)) * this.cooldownMult);
+                        stats.cooldown = cd;
+
+                        let bounces = stats.bounce + Math.floor(stats.level / 2);
+                        const baseDamage = (stats.damage + (stats.level * 8)) * this.damageMult * 0.66;
+                        let damage = baseDamage;
+                        let currentSource = { x: this.x, y: this.y };
+                        let hitList = [];
+
+                        let target = getTarget(this.x, this.y, stats.range, 'weakest', hitList);
+                        
+                        while (target && bounces > 0) {
+                            target.takeDamage(damage, '#facc15');
+                            hitList.push(target);
+                            
+                            addLightningVisual(createLightningVisual(currentSource.x, currentSource.y, target.x, target.y, '#facc15', 'main', 50));
+
+                            if (stats.level >= 2) {
+                                const branchCount = stats.level >= 5 ? 2 : 1;
+                                const branchRange = stats.range * 0.55;
+                                const branchDamage = baseDamage * 0.35;
+                                const branchJumps = 2 + Math.floor(stats.level / 3);
+                                for (let b = 0; b < branchCount; b++) {
+                                    triggerMiniChainLightning(target, branchRange, branchDamage, { maxJumps: branchJumps, forbidden: [target] });
+                                }
+                            }
+
+                            currentSource = target;
+                            bounces--;
+                            damage *= 0.9; 
+                            target = getTarget(currentSource.x, currentSource.y, stats.range, 'weakest', hitList);
+                        }
+                    }
+                }
+            }
+        }
+
+        class Enemy {
+            constructor(type, bossTierOverride, spawnX, spawnY) {
+                this.id = ++GLOBAL_ID; 
+                
+                if (spawnX !== undefined && spawnY !== undefined) {
+                    this.x = spawnX;
+                    this.y = spawnY;
+                } else {
+                    const angle = Math.random() * Math.PI * 2;
+                    const minSpawnDist = Math.max(canvas.width, canvas.height) / 1.5;
+                    const maxSpawnDist = minSpawnDist + 400;
+                    const dist = minSpawnDist + Math.random() * (maxSpawnDist - minSpawnDist);
+
+                    this.x = player.x + Math.cos(angle) * dist;
+                    this.y = player.y + Math.sin(angle) * dist;
+                }
+
+                this.x = Math.max(20, Math.min(WORLD_WIDTH - 20, this.x));
+                this.y = Math.max(20, Math.min(WORLD_HEIGHT - 20, this.y));
+
+                this.type = type;
+                this.knockback = {x:0, y:0};
+                this.maxHp = 0;
+                this.bossTierIndex = -1;
+                
+                this.stunTimer = 0;
+                this.slowTimer = 0;
+                this.splashCooldown = 0; 
+
+                if (type === 'basic') {
+                    this.hp = 20 + (timer/2.5); 
+                    this.speed = 0.4 + (Math.random() * 0.2); 
+                    this.damage = 5;
+                    this.color = '#9ca3af';
+                    this.emoji = "📄"; 
+                    this.radius = 12;
+                    this.xpVal = 1;
+                } else if (type === 'fast') {
+                    this.hp = 10 + (timer/2.5);
+                    this.speed = 1.35; 
+                    this.damage = 3;
+                    this.color = '#ef4444';
+                    this.emoji = "👻"; 
+                    this.radius = 10;
+                    this.xpVal = 10; 
+                } else if (type === 'tank') {
+                    this.hp = (80 + (timer/1.5)) * 4; 
+                    this.speed = 0.25;
+                    this.damage = 15;
+                    this.color = '#f59e0b';
+                    this.emoji = "🤬";
+                    this.radius = 18;
+                    this.xpVal = 20; 
+                } else if (type === 'boss') {
+                    const tierIndex = (bossTierOverride !== undefined) ? bossTierOverride : 0;
+                    const tierData = BOSS_TIERS[tierIndex] || BOSS_TIERS[0];
+                    const tierMultiplier = Math.pow(2, tierIndex); 
+                    
+                    // Base Boss HP 2000
+                    this.hp = 2000 * tierMultiplier; 
+                    this.damage = 50;
+                    this.speed = 0.35; 
+                    this.color = tierData.color; 
+                    this.emoji = tierData.emoji; 
+                    this.name = tierData.name;
+                    this.radius = 60; 
+                    this.xpVal = 400; 
+                    this.bossTierIndex = tierIndex;
+                }
+                this.maxHp = this.hp;
+            }
+
+            update(timeScale) {
+                // Stun Logic
+                if (this.stunTimer > 0) {
+                    this.stunTimer -= timeScale;
+                } else {
+                    const angle = Math.atan2(player.y - this.y, player.x - this.x);
+                    
+                    let currentSpeed = this.speed;
+                    if (this.slowTimer > 0) {
+                        currentSpeed *= 0.6; 
+                        this.slowTimer -= timeScale;
+                    }
+                    
+                    this.x += Math.cos(angle) * currentSpeed * timeScale;
+                    this.y += Math.sin(angle) * currentSpeed * timeScale;
+                }
+                
+                // Separation Logic
+                for (let other of enemies) {
+                    if (other === this) continue;
+                    const dx = this.x - other.x;
+                    const dy = this.y - other.y;
+                    const distSq = dx*dx + dy*dy;
+                    const minDist = this.radius + other.radius;
+                    
+                    if (distSq < minDist * minDist && distSq > 0) {
+                        const dist = Math.sqrt(distSq);
+                        const push = (minDist - dist) / dist * 0.5; 
+                        this.x += dx * push * timeScale * 0.1; 
+                        this.y += dy * push * timeScale * 0.1;
+                    }
+                }
+
+                // Apply knockback decay
+                this.x += this.knockback.x * timeScale;
+                this.y += this.knockback.y * timeScale;
+                this.knockback.x *= Math.pow(0.8, timeScale);
+                this.knockback.y *= Math.pow(0.8, timeScale);
+
+                // Collision with Player
+                const dist = Math.hypot(player.x - this.x, player.y - this.y);
+                if (dist < player.radius + this.radius) {
+                    if (player.invincibilityTimer <= 0) {
+                        player.hp -= this.damage;
+                        addDamageNumber(Math.floor(this.damage), player.x, player.y - 20, '#ff0000');
+                        player.invincibilityTimer = 30;
+                        document.getElementById('damage-overlay').classList.add('flash-red');
+                        setTimeout(() => document.getElementById('damage-overlay').classList.remove('flash-red'), 200);
+                        this.knockback.x = -Math.cos(Math.atan2(player.y - this.y, player.x - this.x)) * 10;
+                        this.knockback.y = -Math.sin(Math.atan2(player.y - this.y, player.x - this.x)) * 10;
+                        camera.shake = 5;
+                        if (player.hp <= 0) endGame();
+                        updateHUD();
+                    }
+                }
+            }
+
+            takeDamage(amt, color = '#ffffff', isEffect = false, knockbackMult = 1.0) {
+                // Prevent splash damage spam (Vaporization Fix)
+                if (isEffect && color === '#fca5a5') { 
+                     if (this.splashCooldown > 0) return false;
+                     this.splashCooldown = 5; 
+                }
+
+                this.hp -= amt;
+                addDamageNumber(Math.floor(amt), this.x, this.y, color, isEffect);
+                
+                const angle = Math.atan2(this.y - player.y, this.x - player.x);
+                const resistance = this.type === 'boss' ? 0.1 : 2;
+                this.knockback.x = Math.cos(angle) * resistance * knockbackMult;
+                this.knockback.y = Math.sin(angle) * resistance * knockbackMult;
+
+                if (this.hp <= 0) {
+                    if (this.type === 'boss' && this.bossTierIndex === BOSS_TIERS.length - 1) {
+                        winGame();
+                        return true;
+                    }
+
+                    // ITEM DROPS: Pizza (0.5%) or Magnet (0.1%)
+                    if (Math.random() < 0.005) {
+                         gems.push({x: this.x, y: this.y, type: 'pizza', val: 0, radius: 10, color: 'white'});
+                    } else if (Math.random() < 0.001) {
+                         gems.push({x: this.x, y: this.y, type: 'magnet', val: 0, radius: 10, color: 'red'});
+                    } else {
+                        // XP GEMS
+                        let gColor = '#60a5fa';
+                        let gRadius = 4;
+                        if (this.xpVal >= 400) { gColor = '#a855f7'; gRadius = 15; }
+                        else if (this.xpVal >= 10) { gColor = '#4ade80'; gRadius = 8; }
+                        else if (this.xpVal >= 5) { gColor = '#ef4444'; gRadius = 6; }
+
+                        gems.push({x: this.x, y: this.y, type: 'xp', val: this.xpVal, radius: gRadius, color: gColor});
+                    }
+                    
+                    score++;
+                    
+                    if (this.type === 'boss') {
+                        camera.shake = 20;
+                        bossSpawned = false; 
+                    }
+                    
+                    return true; 
+                }
+                return false;
+            }
+
+            draw() {
+                if (this.x < camera.x - 50 || this.x > camera.x + canvas.width + 50 ||
+                    this.y < camera.y - 50 || this.y > camera.y + canvas.height + 50) {
+                    return;
+                }
+
+                ctx.font = `${this.radius*2}px Arial`;
+                ctx.textAlign = "center";
+                ctx.textBaseline = "middle";
+                
+                ctx.save();
+                ctx.fillStyle = '#ffffff';
+
+                if (this.stunTimer > 0) {
+                    ctx.shadowBlur = 10;
+                    ctx.shadowColor = 'gold';
+                } else if (this.slowTimer > 0) {
+                    ctx.shadowBlur = 10;
+                    ctx.shadowColor = 'cyan';
+                    ctx.save();
+                    ctx.fillStyle = 'rgba(135, 206, 250, 0.5)'; 
+                    ctx.beginPath();
+                    ctx.arc(this.x, this.y, this.radius, 0, Math.PI*2);
+                    ctx.fill();
+                    ctx.restore();
+                }
+
+                if (this.type === 'fast' && this.x > player.x) {
+                    ctx.scale(-1, 1);
+                    ctx.fillText(this.emoji, -this.x, this.y);
+                } else {
+                    ctx.fillText(this.emoji, this.x, this.y);
+                }
+                
+                if (this.stunTimer > 0) {
+                    ctx.font = "12px Arial";
+                    ctx.fillText("🔒", this.x, this.y - this.radius - 5);
+                }
+
+                ctx.restore();
+            }
+        }
+
+        class Projectile {
+            constructor(x, y, angle, type, damage) {
+                this.x = x;
+                this.y = y;
+                this.angle = angle;
+                this.type = type;
+                this.damage = damage;
+                this.markedForDeletion = false;
+                this.hitList = []; 
+
+                if (type === 'email') {
+                    this.speed = 4; 
+                    // Scale size with AreaMult
+                    this.radius = 8 * player.areaMult;
+                    this.pierce = 1;
+                    this.life = 120; 
+                    this.emoji = '📧';
+                } else if (type === 'offer') {
+                    this.speed = 2; 
+                    this.radius = 14 * player.areaMult;
+                    this.pierce = 999;
+                    this.life = 240; 
+                    this.emoji = '💼';
+                }
+            }
+
+            update(timeScale) {
+                this.x += Math.cos(this.angle) * this.speed * timeScale;
+                this.y += Math.sin(this.angle) * this.speed * timeScale;
+                this.life -= timeScale;
+
+                if (this.life <= 0 || 
+                    this.x < 0 || this.x > WORLD_WIDTH || 
+                    this.y < 0 || this.y > WORLD_HEIGHT) {
+                    this.markedForDeletion = true;
+                }
+            }
+
+            draw() {
+                 if (this.x < camera.x - 50 || this.x > camera.x + canvas.width + 50 ||
+                    this.y < camera.y - 50 || this.y > camera.y + canvas.height + 50) {
+                    return;
+                }
+                ctx.font = `${this.radius*2}px Arial`;
+                ctx.textAlign = "center";
+                ctx.textBaseline = "middle";
+                ctx.save();
+                ctx.translate(this.x, this.y);
+                ctx.rotate(this.angle);
+                ctx.fillText(this.emoji, 0, 0);
+                ctx.restore();
+            }
+        }
+        
+        class PulseWave {
+            constructor(x, y, maxRadius) {
+                this.x = x;
+                this.y = y;
+                this.radius = 0;
+                // Scale max radius with AreaMult
+                this.maxRadius = maxRadius * player.areaMult;
+                this.life = 1.0; 
+                this.speed = 4; 
+            }
+            
+            update(timeScale) {
+                this.radius += this.speed * timeScale;
+                this.life -= 0.025 * timeScale; 
+            }
+            
+            draw() {
+                 if (this.x < camera.x - 50 || this.x > camera.x + canvas.width + 50 ||
+                    this.y < camera.y - 50 || this.y > camera.y + canvas.height + 50) {
+                    return;
+                }
+                if (this.life <= 0) return;
+                
+                ctx.save();
+                ctx.beginPath();
+                ctx.arc(this.x, this.y, this.radius, 0, Math.PI * 2);
+                ctx.strokeStyle = `rgba(252, 165, 165, ${this.life})`; 
+                ctx.lineWidth = 3;
+                ctx.stroke();
+                ctx.fillStyle = `rgba(252, 165, 165, ${this.life * 0.2})`;
+                ctx.fill();
+                ctx.restore();
+            }
+        }
+
+        class LingeringSpark {
+            constructor(x, y, damage) {
+                this.x = x;
+                this.y = y;
+                this.damage = damage;
+                this.life = 120; 
+                // Scale size with AreaMult
+                this.radius = 20 * player.areaMult; 
+                this.tickRate = 60; 
+                this.tickTimer = 0;
+                this.hitCount = 0;
+                this.maxHits = 5; 
+            }
+            
+            update(timeScale) {
+                this.life -= timeScale;
+                this.tickTimer += timeScale;
+
+                if (this.life > 0 && Math.random() < 0.8 * timeScale) {
+                    const angle = Math.random() * Math.PI * 2;
+                    const dist = Math.random() * this.radius * 0.8;
+                    const px = this.x + Math.cos(angle) * dist;
+                    const py = this.y + Math.sin(angle) * dist;
+                    const vx = (Math.random() - 0.5) * 3;
+                    const vy = Math.random() * -4 - 1; 
+                    const color = Math.random() > 0.3 ? '#fef08a' : '#ffffff';
+                    particles.push(new Particle(px, py, color, {x: vx, y: vy}, 15, (Math.random() * 2 + 0.5) * player.areaMult));
+                }
+            }
+            
+            draw() {
+                // Invisible emitter now.
+            }
+        }
+
+        class Particle {
+            constructor(x, y, color, velocity, life = 30, size = 3, options = {}) {
+                this.x = x;
+                this.y = y;
+                this.color = color;
+                if (velocity) {
+                    this.vx = velocity.x;
+                    this.vy = velocity.y;
+                } else {
+                    const angle = Math.random() * Math.PI * 2;
+                    const speed = Math.random() * 2;
+                    this.vx = Math.cos(angle) * speed;
+                    this.vy = Math.sin(angle) * speed;
+                }
+                this.life = life;
+                this.startLife = life;
+                this.size = size;
+                this.friction = options.friction !== undefined ? options.friction : 0.9;
+                this.gravity = options.gravity || 0;
+                this.fade = options.fade !== undefined ? options.fade : true;
+                this.sizeDecay = options.sizeDecay || 0.98;
+            }
+            update(timeScale) {
+                this.vx *= Math.pow(this.friction, timeScale);
+                this.vy *= Math.pow(this.friction, timeScale);
+                this.vy += this.gravity * timeScale;
+                this.x += this.vx * timeScale;
+                this.y += this.vy * timeScale;
+                this.size *= Math.pow(this.sizeDecay, timeScale);
+                this.life -= timeScale;
+            }
+            draw() {
+                 if (this.x < camera.x || this.x > camera.x + canvas.width ||
+                    this.y < camera.y || this.y > camera.y + canvas.height) return;
+
+                const opacity = this.fade ? Math.max(0, this.life / this.startLife) : 1;
+                ctx.save();
+                ctx.fillStyle = this.color;
+                ctx.globalAlpha = opacity;
+                ctx.beginPath();
+                ctx.arc(this.x, this.y, Math.max(0, this.size), 0, Math.PI*2);
+                ctx.fill();
+                ctx.restore();
+            }
+        }
+
+        /**
+         * UTILITIES
+         */
+        // New Targeting Utility (Replaces getNearestEnemy)
+        function getTarget(x, y, range = 400, type = 'nearest', excludeList = []) {
+            let best = null;
+            let record;
+            let recordDist = Infinity; // Track distance for tie-breaking
+
+            if (type === 'weakest' || type === 'nearest') {
+                record = Infinity;
+            } else {
+                record = -Infinity;
+            }
+
+            for (let e of enemies) {
+                if (excludeList.includes(e)) continue;
+                
+                const dist = Math.hypot(e.x - x, e.y - y);
+                if (dist > range) continue;
+
+                if (type === 'nearest') {
+                    if (dist < record) {
+                        record = dist;
+                        best = e;
+                    }
+                } else if (type === 'strongest' || type === 'strongestNearest') {
+                    const hpMetric = e.maxHp;
+                    if (hpMetric > record || (hpMetric === record && dist < recordDist)) {
+                        record = hpMetric;
+                        recordDist = dist;
+                        best = e;
+                    }
+                } else if (type === 'weakest') {
+                    const hpMetric = e.hp;
+                    if (hpMetric < record || (hpMetric === record && dist < recordDist)) {
+                        record = hpMetric;
+                        recordDist = dist;
+                        best = e;
+                    }
+                }
+            }
+            return best;
+        }
+        
+        // Legacy support if called elsewhere, mapped to new function
+        function getNearestEnemy(x, y) {
+            return getTarget(x, y, 400, 'nearest');
+        }
+
+        // Updated to accept isEffect flag
+        function addDamageNumber(val, x, y, color, isEffect = false) {
+            let offsetX = 0;
+            let offsetY = 0;
+            
+            if (isEffect) {
+                offsetX = (Math.random() * 30) - 15;
+                offsetY = -15;
+            }
+
+            damageNumbers.push({
+                val, 
+                x: x + offsetX, 
+                y: y + offsetY, 
+                creationTime: Date.now(), 
+                duration: 600, 
+                color,
+                isEffect
+            });
+        }
+        
+        function createExplosion(x, y, color, count) {
+            for(let i=0; i<count; i++) {
+                const angle = Math.random() * Math.PI * 2;
+                const speed = Math.random() * 4 + 2;
+                const vx = Math.cos(angle) * speed;
+                const vy = Math.sin(angle) * speed;
+                // Particle size scaled by areaMult
+                particles.push(new Particle(x, y, color, {x: vx, y: vy}, 40, (Math.random() * 2 + 1) * player.areaMult));
+            }
+        }
+        
+        function createSplash(x, y, damage, ignoredTarget = null) {
+            pulseWaves.push(new PulseWave(x, y, 120));
+            createExplosion(x, y, '#ffffff', 6);
+            
+            enemies.forEach(e => {
+                if (e === ignoredTarget) return; 
+                const dist = Math.hypot(e.x - x, e.y - y);
+                if (dist < 120 * player.areaMult) { 
+                    // Passes true for isEffect to trigger cooldown check
+                    e.takeDamage(damage, '#fca5a5', true);
+                }
+            });
+        }
+
+        function addLightningVisual(visual) {
+            if (!visual) return;
+            if (visual.type === 'mini') {
+                if (activeMiniLightnings >= MAX_ACTIVE_MINI_LIGHTNINGS) return;
+                activeMiniLightnings++;
+            }
+            lightnings.push(visual);
+        }
+
+        function createParticleBurst({ x, y, count = 12, color = '#ffffff', palette = null, speed = 2, life = 25, size = 2, spread = Math.PI * 2, gravity = 0, fade = true, friction = 0.88, sizeDecay = 0.97 }) {
+            for (let i = 0; i < count; i++) {
+                const angle = (Math.random() * spread) - (spread / 2);
+                const magnitude = (0.3 + Math.random()) * speed;
+                const vx = Math.cos(angle) * magnitude;
+                const vy = Math.sin(angle) * magnitude;
+                const particleLife = life + Math.random() * life * 0.3;
+                const particleSize = size + Math.random() * size * 0.5;
+                const chosenColor = Array.isArray(palette) && palette.length ? palette[Math.floor(Math.random() * palette.length)] : color;
+                particles.push(new Particle(x, y, chosenColor || color, { x: vx, y: vy }, particleLife, particleSize, { gravity, fade, friction, sizeDecay }));
+            }
+        }
+
+        function generateLightningPath(x1, y1, x2, y2, options = {}) {
+            const { iterations = 4, sway = 40 } = options;
+            let path = [{ x: x1, y: y1 }, { x: x2, y: y2 }];
+            let currentSway = sway;
+
+            for (let i = 0; i < iterations; i++) {
+                const nextPath = [path[0]];
+                for (let j = 0; j < path.length - 1; j++) {
+                    const start = path[j];
+                    const end = path[j + 1];
+                    const midX = (start.x + end.x) / 2;
+                    const midY = (start.y + end.y) / 2;
+                    const dx = end.x - start.x;
+                    const dy = end.y - start.y;
+                    const dist = Math.hypot(dx, dy) || 1;
+                    const nx = -dy / dist;
+                    const ny = dx / dist;
+                    const offset = (Math.random() * 2 - 1) * currentSway;
+                    const jitterX = (Math.random() - 0.5) * currentSway * 0.2;
+                    const jitterY = (Math.random() - 0.5) * currentSway * 0.2;
+                    nextPath.push({
+                        x: midX + nx * offset + jitterX,
+                        y: midY + ny * offset + jitterY
+                    });
+                    nextPath.push(end);
+                }
+                path = nextPath;
+                currentSway *= 0.55;
+            }
+            return path;
+        }
+
+        function jitterPoints(points, magnitude) {
+            if (!points) return [];
+            return points.map(p => ({
+                x: p.x + (Math.random() - 0.5) * magnitude,
+                y: p.y + (Math.random() - 0.5) * magnitude
+            }));
+        }
+
+        function simplifyLightningPoints(points, stride = 2) {
+            if (!Array.isArray(points) || points.length <= 2 || stride <= 1) return points;
+            const simplified = [];
+            for (let i = 0; i < points.length; i += stride) {
+                simplified.push(points[i]);
+            }
+            const lastPoint = points[points.length - 1];
+            if (simplified[simplified.length - 1] !== lastPoint) simplified.push(lastPoint);
+            return simplified;
+        }
+
+        function worldToScreen(x, y) {
+            return {
+                x: x - camera.x,
+                y: y - camera.y
+            };
+        }
+
+        async function initLightningParticles() {
+            if (tsLightningContainer || !window.tsParticles) return;
+            const layer = document.getElementById('ts-lightning-layer');
+            if (!layer) return;
+            try {
+                tsLightningContainer = await tsParticles.load('ts-lightning-layer', {
+                    background: { color: { value: 'transparent' } },
+                    fullScreen: { enable: false },
+                    detectRetina: true,
+                    fpsLimit: 60,
+                    particles: {
+                        number: { value: 0 },
+                        color: { value: ['#e0f2fe', '#93c5fd', '#bae6fd'] },
+                        opacity: { value: { min: 0.2, max: 0.9 } },
+                        size: { value: { min: 1, max: 2 } },
+                        life: { duration: { sync: true, value: 0.3 }, count: 1 },
+                        move: {
+                            enable: true,
+                            speed: { min: 40, max: 80 },
+                            direction: 'none',
+                            outModes: { default: 'destroy' }
+                        },
+                        shape: { type: 'circle' }
+                    },
+                    emitters: []
+                });
+            } catch (err) {
+                console.warn('tsParticles lightning init failed', err);
+            }
+        }
+
+        function spawnMiniLightningEffect(worldX, worldY) {
+            if (!tsLightningContainer || typeof tsLightningContainer.addEmitter !== 'function') return;
+            const pos = worldToScreen(worldX, worldY);
+            if (pos.x < 0 || pos.x > canvas.width || pos.y < 0 || pos.y > canvas.height) return;
+            const emitter = tsLightningContainer.addEmitter({
+                autoPlay: true,
+                life: { duration: 0.25, count: 1 },
+                rate: { quantity: 18, delay: 0.004 },
+                position: { x: pos.x, y: pos.y },
+                size: { width: 0, height: 0 },
+                particles: {
+                    number: { value: 0 },
+                    color: { value: ['#e0f2fe', '#7dd3fc', '#bfdbfe'] },
+                    opacity: { value: { min: 0.3, max: 1 } },
+                    size: { value: { min: 1, max: 2.5 } },
+                    life: { duration: { sync: false, value: { min: 0.2, max: 0.4 } }, count: 1 },
+                    move: {
+                        enable: true,
+                        direction: 'outside',
+                        speed: { min: 30, max: 90 },
+                        outModes: { default: 'destroy' }
+                    },
+                    rotate: {
+                        value: { min: 0, max: 360 },
+                        direction: 'random',
+                        animation: { enable: true, speed: 45 }
+                    },
+                    shape: { type: ['circle', 'square'] }
+                }
+            });
+
+            if (emitter) {
+                setTimeout(() => emitter.stop && emitter.stop(), 400);
+            }
+        }
+
+
+        function spawnLightningEmbers(points, color, intensity) {
+            if (!points || points.length === 0) return;
+            const samples = Math.max(1, Math.floor(points.length * intensity));
+            for (let i = 0; i < samples; i++) {
+                const idx = Math.floor(Math.random() * points.length);
+                const p = points[idx];
+                createParticleBurst({
+                    x: p.x,
+                    y: p.y,
+                    count: 6,
+                    color,
+                    palette: [color, '#ffffff', '#e0f2fe'],
+                    speed: 1.5 + intensity,
+                    life: 20,
+                    size: 1.5,
+                    gravity: 0.02,
+                    friction: 0.85,
+                    sizeDecay: 0.93
+                });
+            }
+        }
+
+        function spawnLightningBranches(points, color, life) {
+            if (!points || points.length < 3) return;
+            const count = Math.min(3, Math.max(1, Math.floor(points.length / 6)));
+            for (let i = 0; i < count; i++) {
+                const anchor = points[Math.floor(Math.random() * points.length)];
+                const angle = Math.random() * Math.PI * 2;
+                const length = 40 + Math.random() * 80;
+                const bx = anchor.x + Math.cos(angle) * length;
+                const by = anchor.y + Math.sin(angle) * length;
+                const branch = createLightningVisual(anchor.x, anchor.y, bx, by, color, 'spark', life * 0.35, { spawnBranches: false });
+                addLightningVisual(branch);
+            }
+        }
+
+        function triggerMiniChainLightning(origin, range, damage, options = {}) {
+            if (!origin || damage <= 0) return [];
+            const { maxJumps = 3, forbidden = [] } = options;
+            let jumps = maxJumps;
+            let currentSource = origin;
+            const hits = [];
+            const initialForbidden = Array.isArray(forbidden) ? forbidden.filter(Boolean) : (forbidden ? [forbidden] : []);
+            const blockedSet = new Set(initialForbidden);
+            blockedSet.add(origin);
+            const excludeArr = Array.from(blockedSet);
+
+            while (jumps > 0) {
+                const nextTarget = getTarget(currentSource.x, currentSource.y, range, 'weakest', excludeArr);
+                if (!nextTarget) break;
+
+                nextTarget.takeDamage(damage, '#93c5fd', true);
+                addLightningVisual(createLightningVisual(currentSource.x, currentSource.y, nextTarget.x, nextTarget.y, '#93c5fd', 'mini', 90));
+                spawnMiniLightningEffect(nextTarget.x, nextTarget.y);
+                hits.push(nextTarget);
+
+                blockedSet.add(nextTarget);
+                excludeArr.push(nextTarget);
+                currentSource = nextTarget;
+                jumps--;
+            }
+            return hits;
+        }
+
+        function createLightningVisual(x1, y1, x2, y2, color, type = 'main', life = 50, options = {}) {
+            const isMini = type === 'mini';
+            const isSpark = type === 'spark';
+            const spawnBranches = options.spawnBranches !== undefined ? options.spawnBranches : type === 'main';
+            const dx = x2 - x1;
+            const dy = y2 - y1;
+            const dist = Math.max(1, Math.hypot(dx, dy));
+            const baseThickness = isMini ? 3 : isSpark ? 2 : 6;
+            const iterations = isMini ? 2 : isSpark ? 2 : 4;
+            const sway = dist * (isMini ? 0.1 : isSpark ? 0.08 : 0.22);
+            let corePath = generateLightningPath(x1, y1, x2, y2, { iterations, sway });
+            if (isMini) corePath = simplifyLightningPoints(corePath, 2);
+            const layerCount = isMini ? 1 : isSpark ? 1 : 3;
+            const layers = [];
+
+            for (let i = 0; i < layerCount; i++) {
+                const magnitude = sway * (0.08 + i * 0.05);
+                const layerPoints = i === 0 ? corePath : jitterPoints(corePath, magnitude);
+                layers.push({
+                    points: layerPoints,
+                    thickness: Math.max(1, baseThickness - i * 0.9),
+                    opacity: Math.max(0.25, 1 - i * 0.25)
+                });
+            }
+
+            const visual = {
+                x1,
+                y1,
+                x2,
+                y2,
+                points: corePath,
+                layers,
+                color,
+                life,
+                maxLife: life,
+                type,
+                thickness: baseThickness
+            };
+
+            spawnLightningEmbers(corePath, isMini ? '#60a5fa' : '#fde047', isMini ? 0.18 : 0.65);
+            if (spawnBranches && type === 'main') {
+                const branchColor = '#facc15';
+                spawnLightningBranches(corePath, branchColor, life);
+            }
+            return visual;
+        }
+
+        function spawnEnemy(typeOverride = null, ignoreCap = false, x = undefined, y = undefined) {
+            // Use Difficulty Mult for spawn cap
+            // RETUNED: Exponential curve targeting ~400 enemies at 10 mins
+            const growth = Math.floor(Math.pow(timer, 1.5) / 35);
+            const maxEnemies = (10 + growth) * player.difficultyMult; 
+            
+            if (!ignoreCap && enemies.length >= maxEnemies) return;
+
+            let type = 'basic';
+            if (typeOverride) {
+                type = typeOverride;
+            } else {
+                const rand = Math.random();
+                if (timer > 30 && rand < 0.2) type = 'fast';
+                if (timer > 60 && rand < 0.1) type = 'tank';
+                if (timer > 120 && rand < 0.3) type = 'fast';
+            }
+
+            enemies.push(new Enemy(type, currentBossTier, x, y));
+        }
+
+        /**
+         * UI & GAME LOOP FUNCTIONS
+         */
+        function initGame() {
+            resize();
+            window.addEventListener('resize', resize);
+            setupInputs();
+            initLightningParticles();
+        }
+
+        function setupInputs() {
+            window.addEventListener('keydown', e => {
+                if (e.key === 'Escape') {
+                    if (manualPause) {
+                        resumeManualPause();
+                        return;
+                    }
+                    if (gameState === 'PLAYING') {
+                        pauseManual();
+                        return;
+                    }
+                }
+
+                if (gameState === 'PAUSED') {
+                    if (!manualPause) {
+                        handleUpgradeInput(e);
+                    }
+                    return; 
+                }
+                if (keys.hasOwnProperty(e.key)) keys[e.key] = true;
+            });
+            window.addEventListener('keyup', e => {
+                if (keys.hasOwnProperty(e.key)) keys[e.key] = false;
+            });
+
+            canvas.addEventListener('touchstart', e => {
+                e.preventDefault();
+                const t = e.touches[0];
+                touchInput.active = true;
+                touchInput.startX = t.clientX;
+                touchInput.startY = t.clientY;
+                touchInput.currX = t.clientX;
+                touchInput.currY = t.clientY;
+            }, {passive: false});
+
+            canvas.addEventListener('touchmove', e => {
+                e.preventDefault();
+                if (!touchInput.active) return;
+                const t = e.touches[0];
+                touchInput.currX = t.clientX;
+                touchInput.currY = t.clientY;
+                
+                const maxDist = 50;
+                let dx = touchInput.currX - touchInput.startX;
+                let dy = touchInput.currY - touchInput.startY;
+                const dist = Math.sqrt(dx*dx + dy*dy);
+                
+                if (dist > 10) {
+                    touchInput.dx = dx / dist; 
+                    touchInput.dy = dy / dist;
+                } else {
+                    touchInput.dx = 0;
+                    touchInput.dy = 0;
+                }
+            }, {passive: false});
+
+            canvas.addEventListener('touchend', e => {
+                e.preventDefault();
+                touchInput.active = false;
+                touchInput.dx = 0;
+                touchInput.dy = 0;
+            });
+        }
+
+        function pauseManual() {
+            if (gameState !== 'PLAYING') return;
+            manualPause = true;
+            gameState = 'PAUSED';
+            Object.keys(keys).forEach(k => keys[k] = false);
+            const overlay = document.getElementById('pause-overlay');
+            if (overlay) overlay.classList.remove('hidden');
+        }
+
+        function resumeManualPause() {
+            if (!manualPause) return;
+            manualPause = false;
+            const overlay = document.getElementById('pause-overlay');
+            if (overlay) overlay.classList.add('hidden');
+            gameState = 'PLAYING';
+            lastTime = performance.now();
+            requestAnimationFrame(animate);
+        }
+
+        function handleUpgradeInput(e) {
+            if (upgradeOptions.length === 0) return;
+
+            if (e.key === 'ArrowLeft' || e.key === 'a' || e.key === 'A') {
+                selectedUpgradeIndex = (selectedUpgradeIndex - 1 + upgradeOptions.length) % upgradeOptions.length;
+                highlightSelectedUpgrade();
+            } else if (e.key === 'ArrowRight' || e.key === 'd' || e.key === 'D') {
+                selectedUpgradeIndex = (selectedUpgradeIndex + 1) % upgradeOptions.length;
+                highlightSelectedUpgrade();
+            } else if (e.key === 'Enter' || e.key === ' ') {
+                selectUpgrade(upgradeOptions[selectedUpgradeIndex].id);
+            }
+        }
+
+        function highlightSelectedUpgrade() {
+            for (let i = 0; i < upgradeOptions.length; i++) {
+                const card = document.getElementById(`upgrade-card-${i}`);
+                if (!card) continue;
+                
+                if (i === selectedUpgradeIndex) {
+                    card.classList.remove('border-gray-600');
+                    card.classList.add('border-white', 'bg-gray-700', 'scale-105', 'shadow-lg', 'shadow-blue-500/50');
+                } else {
+                    card.classList.add('border-gray-600');
+                    card.classList.remove('border-white', 'bg-gray-700', 'scale-105', 'shadow-lg', 'shadow-blue-500/50');
+                }
+            }
+        }
+
+        function resize() {
+            canvas.width = window.innerWidth;
+            canvas.height = window.innerHeight;
+        }
+
+        function startGame() {
+            document.getElementById('start-screen').classList.add('hidden');
+            document.getElementById('hud').classList.remove('hidden');
+            if (window.innerWidth < 768) {
+                document.getElementById('mobile-hint').classList.remove('hidden');
+            }
+
+            player = new Player();
+            enemies = [];
+            projectiles = [];
+            gems = [];
+            particles = [];
+            damageNumbers = [];
+            lightnings = []; 
+            activeMiniLightnings = 0;
+            lingeringSparks = [];
+            pulseWaves = []; 
+            manualPause = false;
+            const pauseOverlay = document.getElementById('pause-overlay');
+            if (pauseOverlay) pauseOverlay.classList.add('hidden');
+            score = 0;
+            timer = 0;
+            frameCount = 0;
+            bossSpawned = false;
+            currentBossTier = 0; 
+            camera = { x: 0, y: 0, shake: 0 };
+            
+            updateHUD();
+
+            gameState = 'PLAYING';
+            lastTime = performance.now();
+            animate(lastTime);
+            
+            setInterval(() => {
+                if (gameState === 'PLAYING') {
+                    timer++;
+                    
+                    if (timer > 0 && timer % 120 === 0) {
+                        if (currentBossTier < BOSS_TIERS.length) {
+                            enemies.push(new Enemy('boss', currentBossTier));
+                            const bossName = BOSS_TIERS[currentBossTier].name;
+                            // Text lasts 3000ms. Lighter Purple.
+                            const bossText = { val: `${bossName} HAS ARRIVED`, x: player.x, y: player.y - 100, creationTime: Date.now(), duration: 3000, color: '#d8b4fe' };
+                            damageNumbers.push(bossText);
+                            camera.shake = 20;
+                            currentBossTier++; 
+                        }
+                    }
+                    else if (timer > 0 && timer % 60 === 0) {
+                         const swarmSize = 40 + Math.floor(timer/5); 
+                         const swarmAngle = Math.random() * Math.PI * 2;
+                         const swarmDist = 500; 
+                         const centerX = player.x + Math.cos(swarmAngle) * swarmDist;
+                         const centerY = player.y + Math.sin(swarmAngle) * swarmDist;
+
+                         for(let i=0; i<swarmSize; i++) {
+                             const r = Math.random() * 120; 
+                             const theta = Math.random() * Math.PI * 2;
+                             const ex = centerX + r * Math.cos(theta);
+                             const ey = centerY + r * Math.sin(theta);
+                             spawnEnemy('basic', true, ex, ey); 
+                         }
+                         
+                         // SWARM TEXT FIX: Explicit 3000ms duration. Lighter Red.
+                         const swarmText = { val: "RESUME SWARM DETECTED!", x: player.x, y: player.y - 150, creationTime: Date.now(), duration: 3000, color: '#fda4af' };
+                         damageNumbers.push(swarmText);
+                    }
+
+                    updateHUD();
+                }
+            }, 1000);
+        }
+
+        function showUpgrades() {
+            const container = document.getElementById('upgrade-container');
+            container.innerHTML = '';
+            upgradeOptions = []; 
+            const available = [...UPGRADES]; 
+            while(upgradeOptions.length < 3 && available.length > 0) {
+                const idx = Math.floor(Math.random() * available.length);
+                upgradeOptions.push(available[idx]);
+                available.splice(idx, 1); 
+            }
+            selectedUpgradeIndex = 0; 
+            document.getElementById('upgrade-screen').classList.remove('hidden');
+
+            upgradeOptions.forEach((u, index) => {
+                const isWeapon = u.type === 'WEAPON';
+                const currentLevel = isWeapon ? player.weapons[u.id].level : 0;
+                
+                // Level Display Logic
+                let levelString = '';
+                if (isWeapon) {
+                    const nextLevel = currentLevel + 1;
+                    levelString = `<span class="ml-2 text-gray-500">LVL ${currentLevel} ➜</span> <span class="text-green-400">LVL ${nextLevel}</span>`;
+                }
+
+                // Description Logic (Conditional Lvl 2 Text)
+                let description = u.desc;
+                if (isWeapon && (currentLevel + 1) === 2 && u.lvl2Text) {
+                    description += `<div class="text-yellow-300 font-bold mt-2 text-xs animate-pulse">✨ ${u.lvl2Text}</div>`;
+                }
+
+                const card = document.createElement('div');
+                card.id = `upgrade-card-${index}`;
+                card.className = `bg-gray-800 p-4 rounded border-2 cursor-pointer transition transform duration-150`;
+                if (index === selectedUpgradeIndex) {
+                    card.classList.add('border-white', 'bg-gray-700', 'scale-105', 'shadow-lg', 'shadow-blue-500/50');
+                } else {
+                    card.classList.add('border-gray-600');
+                }
+                card.innerHTML = `
+                    <div class="flex items-center gap-3 mb-2 pointer-events-none">
+                        <div class="text-4xl">${u.icon}</div>
+                        <div>
+                            <div class="font-bold text-lg text-white">${u.name}</div>
+                            <div class="text-xs text-gray-400 uppercase flex items-center">
+                                ${u.type} ${levelString}
+                            </div>
+                        </div>
+                    </div>
+                    <p class="text-sm text-gray-300 leading-snug pointer-events-none">${description}</p>
+                `;
+                card.onmouseenter = () => {
+                    selectedUpgradeIndex = index;
+                    highlightSelectedUpgrade();
+                };
+                card.onclick = () => selectUpgrade(u.id);
+                container.appendChild(card);
+            });
+        }
+
+        function selectUpgrade(id) {
+            player.upgrade(id);
+            document.getElementById('upgrade-screen').classList.add('hidden');
+            gameState = 'PLAYING';
+            lastTime = performance.now(); 
+            requestAnimationFrame(animate);
+        }
+
+        function endGame() {
+            gameState = 'GAMEOVER';
+            const m = Math.floor(timer / 60);
+            const s = timer % 60;
+            const timeString = `${m.toString().padStart(2,'0')}:${s.toString().padStart(2,'0')}`;
+            document.getElementById('final-time').innerText = timeString;
+            document.getElementById('final-kills').innerText = score;
+            document.getElementById('game-over-screen').classList.remove('hidden');
+            document.getElementById('hud').classList.add('hidden');
+            document.getElementById('boss-hud').classList.add('hidden');
+            const msg = TERMINATION_REASONS[Math.floor(Math.random() * TERMINATION_REASONS.length)];
+            document.getElementById('static-text-content').innerText = `"${msg}"`;
+        }
+
+        function winGame() {
+            gameState = 'WIN';
+            const m = Math.floor(timer / 60);
+            const s = timer % 60;
+            const timeString = `${m.toString().padStart(2,'0')}:${s.toString().padStart(2,'0')}`;
+            document.getElementById('win-time').innerText = timeString;
+            document.getElementById('win-kills').innerText = score;
+            document.getElementById('win-screen').classList.remove('hidden');
+            document.getElementById('hud').classList.add('hidden');
+            document.getElementById('boss-hud').classList.add('hidden');
+        }
+
+        function updateHUD() {
+            if (!player) return;
+            const hpPct = (player.hp / player.maxHp) * 100;
+            document.getElementById('hp-bar').style.width = `${Math.max(0, hpPct)}%`;
+            const xpPct = (player.xp / player.xpToNext) * 100;
+            document.getElementById('xp-bar').style.width = `${xpPct}%`;
+            const m = Math.floor(timer / 60);
+            const s = timer % 60;
+            document.getElementById('timer').innerText = `${m.toString().padStart(2,'0')}:${s.toString().padStart(2,'0')}`;
+            document.getElementById('kill-count').innerText = score;
+            document.getElementById('level-display').innerText = player.level;
+            document.getElementById('stat-speed').innerText = player.speed.toFixed(2) + 'x';
+            document.getElementById('stat-dmg').innerText = player.damageMult.toFixed(2) + 'x';
+            document.getElementById('stat-area').innerText = player.areaMult.toFixed(2) + 'x';
+            document.getElementById('stat-diff').innerText = player.difficultyMult.toFixed(2) + 'x';
+            document.getElementById('stat-cdr').innerText = player.cooldownMult.toFixed(2) + 'x';
+            document.getElementById('stat-range').innerText = player.pickupRange;
+
+            const weaponGrid = document.getElementById('weapon-grid');
+            weaponGrid.innerHTML = ''; 
+            const weaponIcons = { email: '📧', aura: '🌐', offer: '💼', referral: '⚡' };
+            for (const [id, weapon] of Object.entries(player.weapons)) {
+                if (weapon.level > 0) {
+                    const badge = document.createElement('div');
+                    badge.className = 'bg-gray-700 px-2 py-1 rounded border border-gray-500 flex items-center gap-1';
+                    badge.innerHTML = `<span class="text-base">${weaponIcons[id]}</span> <span class="text-yellow-400 font-bold">${weapon.level}</span>`;
+                    weaponGrid.appendChild(badge);
+                }
+            }
+
+            const boss = enemies.find(e => e.type === 'boss');
+            const bossHud = document.getElementById('boss-hud');
+            if (boss) {
+                bossHud.classList.remove('hidden');
+                document.getElementById('boss-name').innerText = boss.name;
+                document.getElementById('boss-name').style.color = boss.color;
+                const bossHpPct = (boss.hp / boss.maxHp) * 100;
+                document.getElementById('boss-hp-bar').style.width = `${Math.max(0, bossHpPct)}%`;
+            } else {
+                bossHud.classList.add('hidden');
+            }
+        }
+
+        function drawBackground() {
+            const gridSize = 100;
+            const startCol = Math.floor(camera.x / gridSize);
+            const endCol = startCol + (canvas.width / gridSize) + 1;
+            const startRow = Math.floor(camera.y / gridSize);
+            const endRow = startRow + (canvas.height / gridSize) + 1;
+            ctx.strokeStyle = '#222';
+            ctx.lineWidth = 1;
+            ctx.beginPath();
+            for (let c = startCol; c <= endCol; c++) {
+                let x = c * gridSize;
+                if(x < 0 || x > WORLD_WIDTH) continue;
+                ctx.moveTo(x, Math.max(0, camera.y));
+                ctx.lineTo(x, Math.min(WORLD_HEIGHT, camera.y + canvas.height));
+            }
+            for (let r = startRow; r <= endRow; r++) {
+                let y = r * gridSize;
+                if(y < 0 || y > WORLD_HEIGHT) continue;
+                ctx.moveTo(Math.max(0, camera.x), y);
+                ctx.lineTo(Math.min(WORLD_WIDTH, camera.x + canvas.width), y);
+            }
+            ctx.stroke();
+            ctx.strokeStyle = '#f00';
+            ctx.lineWidth = 4;
+            ctx.strokeRect(0, 0, WORLD_WIDTH, WORLD_HEIGHT);
+        }
+
+        function drawMinimap() {
+            ctx.setTransform(1, 0, 0, 1, 0, 0);
+            const mapSize = 120;
+            const mapPaddingX = 20;
+            const mapPaddingY = 20; 
+            const mapX = mapPaddingX;
+            const mapY = canvas.height - mapSize - mapPaddingY;
+            const scaleX = mapSize / WORLD_WIDTH;
+            const scaleY = mapSize / WORLD_HEIGHT;
+
+            ctx.save();
+            ctx.fillStyle = 'rgba(20, 20, 20, 0.9)'; 
+            ctx.fillRect(mapX, mapY, mapSize, mapSize);
+            ctx.strokeStyle = '#00ff00'; 
+            ctx.lineWidth = 2;
+            ctx.strokeRect(mapX, mapY, mapSize, mapSize);
+
+            const pMapX = mapX + (player.x * scaleX);
+            const pMapY = mapY + (player.y * scaleY);
+            ctx.fillStyle = '#ffffff'; 
+            ctx.beginPath();
+            ctx.arc(pMapX, pMapY, 4, 0, Math.PI*2);
+            ctx.fill();
+
+            for (let e of enemies) {
+                const eMapX = mapX + (e.x * scaleX);
+                const eMapY = mapY + (e.y * scaleY);
+                ctx.beginPath();
+                if (e.type === 'boss') {
+                    ctx.fillStyle = '#9333ea'; 
+                    ctx.strokeStyle = '#ffffff';
+                    ctx.lineWidth = 2;
+                    ctx.arc(eMapX, eMapY, 6, 0, Math.PI*2); 
+                    ctx.fill();
+                    ctx.stroke();
+                } else {
+                    ctx.fillStyle = '#ff0000'; 
+                    ctx.rect(eMapX, eMapY, 2, 2);
+                    ctx.fill();
+                }
+            }
+
+            ctx.strokeStyle = 'rgba(255, 255, 255, 0.5)';
+            ctx.lineWidth = 1;
+            ctx.strokeRect(
+                mapX + (camera.x * scaleX), 
+                mapY + (camera.y * scaleY),
+                canvas.width * scaleX,
+                canvas.height * scaleY
+            );
+            ctx.restore();
+        }
+
+        function animate(timestamp) {
+            if (gameState !== 'PLAYING') return;
+            requestAnimationFrame(animate);
+            
+            // --- DELTA TIME CALCULATION ---
+            const dt = timestamp - lastTime;
+            lastTime = timestamp;
+            // MULTIPLIED BY 3.0 for 1.5x speed request (relative to prev 2.0)
+            const timeScale = (dt / 16.67) * 3.0; 
+            
+            frameCount++;
+
+            let targetCamX = player.x - canvas.width / 2;
+            let targetCamY = player.y - canvas.height / 2;
+
+            if (camera.shake > 0) {
+                targetCamX += (Math.random() * camera.shake) - (camera.shake/2);
+                targetCamY += (Math.random() * camera.shake) - (camera.shake/2);
+                camera.shake *= 0.9;
+                if(camera.shake < 0.5) camera.shake = 0;
+            }
+
+            camera.x = Math.max(0, Math.min(targetCamX, WORLD_WIDTH - canvas.width));
+            camera.y = Math.max(0, Math.min(targetCamY, WORLD_HEIGHT - canvas.height));
+
+            ctx.setTransform(1, 0, 0, 1, 0, 0); 
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+            ctx.save();
+            ctx.translate(-camera.x, -camera.y);
+
+            drawBackground();
+            player.update(timeScale);
+            
+            // Spawn Logic: Dynamic Interval
+            // Starts at 60 frames (1s), speeds up to 5 frames (~12/s) over ~10 minutes
+            const spawnInterval = Math.max(5, 60 - Math.floor(timer / 10));
+            if (frameCount % spawnInterval === 0) spawnEnemy();
+
+            // Projectiles - Safe Loop
+            for (let i = projectiles.length - 1; i >= 0; i--) {
+                let p = projectiles[i];
+                p.update(timeScale);
+                p.draw();
+                
+                // Check against all enemies
+                for (let j = 0; j < enemies.length; j++) {
+                    let e = enemies[j];
+                    const dist = Math.hypot(p.x - e.x, p.y - e.y);
+                    
+                    if (dist < p.radius + e.radius) {
+                        // USE ID FOR HIT CHECK
+                        if (p.hitList.includes(e.id)) continue; 
+
+                        let pColor = '#ffffff';
+                        if(p.type === 'offer') pColor = '#a0522d'; 
+                        else if(p.type === 'email') pColor = '#ffffff'; 
+                        
+                        let knockbackMult = (p.type === 'email') ? 2.0 : 1.0;
+                        
+                        // Damage
+                        e.takeDamage(p.damage, pColor, false, knockbackMult);
+                        
+                        p.hitList.push(e.id); // Push ID
+
+                        if (p.type === 'email' && player.weapons.email.level >= 2) {
+                            // Pass e as ignored target, add "pop" particle
+                            createExplosion(p.x, p.y, '#ffffff', 8);
+                            createSplash(p.x, p.y, p.damage * 0.5, e);
+                        }
+                        
+                        if (p.type === 'offer' && player.weapons.offer.level >= 2) {
+                            e.stunTimer = 30; // Reverted to 30
+                            // Small brown debris for impact
+                            createExplosion(p.x, p.y, '#a0522d', 5);
+                        }
+
+                        if(p.pierce !== 999) {
+                             p.pierce--;
+                             if (p.pierce <= 0) p.markedForDeletion = true;
+                        }
+                        if (p.markedForDeletion) break;
+                    }
+                }
+                if (p.markedForDeletion) projectiles.splice(i, 1);
+            }
+            
+            for (let i = pulseWaves.length - 1; i >= 0; i--) {
+                let p = pulseWaves[i];
+                p.update(timeScale);
+                p.draw();
+                if (p.life <= 0) pulseWaves.splice(i, 1);
+            }
+
+            for (let i = lingeringSparks.length - 1; i >= 0; i--) {
+                let s = lingeringSparks[i];
+                s.update(timeScale);
+                s.draw();
+                
+                if (s.tickTimer >= s.tickRate) {
+                     s.tickTimer = 0;
+                     let hitSomeone = false;
+                     enemies.forEach(e => {
+                        const dist = Math.hypot(e.x - s.x, e.y - s.y);
+                        if (dist < s.radius + e.radius) {
+                            // Spark hit: Lighter Yellow AND Small Text
+                            e.takeDamage(s.damage, '#fef08a', true);
+                            hitSomeone = true;
+                        }
+                    });
+                    if (hitSomeone) s.hitCount++;
+                }
+
+                if (s.life <= 0 || s.hitCount >= s.maxHits) lingeringSparks.splice(i, 1);
+            }
+
+            // Safe Enemy Update & Removal Loop
+            for (let i = enemies.length - 1; i >= 0; i--) {
+                let e = enemies[i];
+                e.update(timeScale);
+                e.draw();
+                if (e.hp <= 0) {
+                    enemies.splice(i, 1);
+                }
+            }
+
+            try {
+                for (let i = lightnings.length - 1; i >= 0; i--) {
+                    let l = lightnings[i];
+                    l.life -= timeScale;
+                    if (Math.max(l.x1, l.x2) > camera.x && Math.min(l.x1, l.x2) < camera.x + canvas.width &&
+                        Math.max(l.y1, l.y2) > camera.y && Math.min(l.y1, l.y2) < camera.y + canvas.height) {
+                        ctx.save();
+                        const isMini = l.type === 'mini';
+                        const intensity = Math.max(0.05, l.life / (l.maxLife || 1));
+                        const glowColor = isMini ? '#60a5fa' : '#fde68a';
+                        const outerColor = isMini ? 'rgba(147, 197, 253, 0.9)' : 'rgba(253, 224, 71, 0.95)';
+                        const midColor = isMini ? '#bfdbfe' : '#fff5cc';
+                        const coreColor = isMini ? '#e0f2fe' : '#ffffff';
+                        ctx.shadowBlur = (isMini ? 35 : 70) * intensity;
+                        ctx.shadowColor = glowColor;
+                        ctx.lineCap = 'round';
+                        ctx.globalAlpha = 0.8 + intensity * 0.2;
+
+                        const fallbackPoints = [
+                            { x: l.x1, y: l.y1 },
+                            { x: (l.x1 + l.x2) / 2, y: (l.y1 + l.y2) / 2 },
+                            { x: l.x2, y: l.y2 }
+                        ];
+                        const layerSet = (l.layers && l.layers.length) ? l.layers : [{ points: l.points || fallbackPoints, thickness: l.thickness || 4, opacity: 1 }];
+                        const drawStroke = (pts) => {
+                            if (!pts || pts.length < 2) return;
+                            ctx.beginPath();
+                            ctx.moveTo(pts[0].x, pts[0].y);
+                            for (let p = 1; p < pts.length; p++) {
+                                ctx.lineTo(pts[p].x, pts[p].y);
+                            }
+                            ctx.stroke();
+                        };
+
+                        layerSet.forEach((layer, idx) => {
+                            const layerPoints = layer.points || fallbackPoints;
+                            const layerThickness = layer.thickness || (l.thickness || 4);
+                            const layerOpacity = (layer.opacity ?? 1) * (0.6 + intensity * 0.4);
+                            ctx.globalAlpha = Math.min(1, layerOpacity);
+
+                            if (idx === 0) {
+                                ctx.strokeStyle = outerColor;
+                                ctx.lineWidth = layerThickness + 2;
+                                drawStroke(layerPoints);
+                                ctx.strokeStyle = midColor;
+                                ctx.lineWidth = layerThickness;
+                                drawStroke(layerPoints);
+                                ctx.strokeStyle = coreColor;
+                                ctx.lineWidth = Math.max(1, layerThickness * 0.5);
+                                drawStroke(layerPoints);
+                            } else {
+                                ctx.strokeStyle = idx % 2 === 0 ? outerColor : midColor;
+                                ctx.lineWidth = Math.max(1, layerThickness * 0.9);
+                                drawStroke(layerPoints);
+                            }
+                        });
+                        ctx.globalAlpha = 1;
+                        ctx.restore();
+
+                        const sparkChance = isMini ? 0.15 : 0.5;
+                        if (Math.random() < sparkChance * timeScale) {
+                            const vx = (Math.random() - 0.5) * (isMini ? 1.4 : 2);
+                            const vy = (Math.random() - 0.2) * (isMini ? 2 : 3) + (isMini ? 0.3 : 1);
+                            particles.push(new Particle(l.x2, l.y2, isMini ? '#93c5fd' : '#facc15', { x: vx, y: vy }, 16, Math.random() * 1.5));
+                        }
+                    }
+                    if (l.life <= 0) {
+                        if (l.type === 'mini' && activeMiniLightnings > 0) activeMiniLightnings--;
+                        lightnings.splice(i, 1);
+                    }
+                }
+            } catch (err) {
+                console.error('Lightning render error', err);
+                lightnings.length = 0;
+                activeMiniLightnings = 0;
+            }
+
+            gems.forEach(g => {
+                if (g.x >= camera.x && g.x <= camera.x + canvas.width &&
+                    g.y >= camera.y && g.y <= camera.y + canvas.height) {
+                    
+                    if (g.type === 'pizza') {
+                        ctx.font = "24px Arial";
+                        ctx.textAlign = "center";
+                        ctx.textBaseline = "middle";
+                        ctx.fillText("🍕", g.x, g.y);
+                    } else if (g.type === 'magnet') {
+                        ctx.font = "24px Arial";
+                        ctx.textAlign = "center";
+                        ctx.textBaseline = "middle";
+                        ctx.fillText("🧲", g.x, g.y);
+                    } else {
+                        ctx.fillStyle = g.color || '#60a5fa';
+                        ctx.beginPath();
+                        ctx.arc(g.x, g.y, g.radius || 4, 0, Math.PI*2);
+                        ctx.fill();
+                        if (Math.random() < 0.1) {
+                            ctx.fillStyle = 'white';
+                            ctx.fillRect(g.x, g.y, 2, 2);
+                        }
+                    }
+                }
+            });
+
+            for (let i = particles.length - 1; i >= 0; i--) {
+                particles[i].update(timeScale);
+                particles[i].draw();
+                if (particles[i].life <= 0) particles.splice(i, 1);
+            }
+
+            // Damage Numbers
+            const now = Date.now();
+            for (let i = damageNumbers.length - 1; i >= 0; i--) {
+                let d = damageNumbers[i];
+                
+                d.y -= 0.5 * timeScale;
+                
+                if (d.x >= camera.x && d.x <= camera.x + canvas.width &&
+                    d.y >= camera.y && d.y <= camera.y + canvas.height) {
+                    
+                    const elapsed = now - d.creationTime;
+                    const alpha = Math.max(0, 1 - (elapsed / d.duration));
+                    
+                    ctx.save();
+                    ctx.globalAlpha = alpha;
+                    
+                    if (d.isEffect) {
+                        ctx.font = "italic bold 20px 'Segoe UI', sans-serif";
+                        ctx.fillStyle = d.color;
+                        ctx.strokeStyle = '#000';
+                        ctx.lineWidth = 1;
+                    } else {
+                        ctx.font = "900 36px 'Arial Black', Gadget, sans-serif";
+                        ctx.lineWidth = 3;
+                        ctx.fillStyle = d.color; 
+                        ctx.strokeStyle = "#000000"; 
+                    }
+
+                    ctx.strokeText(d.val, d.x, d.y);
+                    ctx.fillText(d.val, d.x, d.y);
+                    ctx.restore();
+                }
+                
+                if (now > d.creationTime + d.duration) {
+                    damageNumbers.splice(i, 1);
+                }
+            }
+
+            player.draw();
+            ctx.restore();
+            drawMinimap();
+
+            if (touchInput.active) {
+                ctx.strokeStyle = 'rgba(255, 255, 255, 0.3)';
+                ctx.lineWidth = 2;
+                ctx.beginPath();
+                ctx.arc(touchInput.startX, touchInput.startY, 40, 0, Math.PI * 2);
+                ctx.stroke();
+                ctx.fillStyle = 'rgba(255, 255, 255, 0.5)';
+                ctx.beginPath();
+                ctx.arc(touchInput.currX, touchInput.currY, 15, 0, Math.PI * 2);
+                ctx.fill();
+            }
+        }
+        
+        initGame();
+    </script>
+</body>
+</html>
