@@ -6,6 +6,7 @@
     <title>Headhunter: The Infinite Pipeline</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://cdn.jsdelivr.net/npm/tsparticles@3.7.1/tsparticles.bundle.min.js" crossorigin="anonymous"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/tone/14.8.49/Tone.js"></script>
     <style>
         body {
             margin: 0;
@@ -86,9 +87,12 @@
     <div id="damage-overlay" class="absolute inset-0 pointer-events-none"></div>
     <div class="scanlines"></div>
     <div id="ts-lightning-layer" class="absolute inset-0 pointer-events-none"></div>
-    <div id="pause-overlay" class="hidden absolute inset-0 bg-black/70 flex flex-col items-center justify-center text-center text-white z-20 pointer-events-none">
-        <div class="text-4xl font-bold mb-2">Paused</div>
-        <div class="text-sm text-gray-300">Press ESC to resume</div>
+    <div id="pause-overlay" class="hidden absolute inset-0 bg-black/80 flex flex-col items-center justify-center text-center text-white z-50 pointer-events-auto p-8">
+        <div class="text-4xl font-bold mb-2 text-yellow-400">PAUSED</div>
+        <div class="text-sm text-gray-400 mb-8">Press ESC to resume</div>
+        <div id="pause-stats" class="grid grid-cols-1 md:grid-cols-2 gap-4 w-full max-w-2xl">
+            <!-- Stats injected via JS -->
+        </div>
     </div>
 
     <!-- UI Layer -->
@@ -173,13 +177,19 @@
 
         <!-- Level Up Modal -->
         <div id="upgrade-screen" class="hidden absolute inset-0 flex items-center justify-center bg-black/90 z-40 pointer-events-auto">
-            <div class="w-full max-w-2xl p-6 bg-gray-900/80 rounded-xl border border-gray-700 backdrop-blur-md shadow-2xl">
-                <h2 class="text-3xl font-bold text-center mb-2 text-yellow-400">PROMOTION AVAILABLE!</h2>
+            <div class="w-full max-w-2xl p-6 bg-gray-900/80 rounded-xl border border-gray-700 backdrop-blur-md shadow-2xl flex flex-col items-center">
+                <h2 id="upgrade-title" class="text-3xl font-bold text-center mb-2 text-yellow-400">PROMOTION AVAILABLE!</h2>
                 <p class="text-center text-gray-400 mb-8">Choose a new skill for your toolkit <span class="text-xs opacity-60 block mt-1">(Use Arrow Keys / WASD to Select, Space/Enter to Confirm)</span></p>
                 
-                <div id="upgrade-container" class="grid grid-cols-1 md:grid-cols-3 gap-4">
+                <div id="upgrade-container" class="grid grid-cols-1 md:grid-cols-3 gap-4 w-full">
                     <!-- Cards injected via JS -->
                 </div>
+
+                <!-- Reroll Button -->
+                <button id="reroll-btn" onclick="rerollUpgrades()" class="mt-6 px-6 py-2 bg-gray-700 hover:bg-gray-600 text-white font-bold rounded border border-gray-500 transition flex items-center gap-2 group">
+                    <span class="group-hover:text-yellow-200">🎲 Reroll Options</span>
+                    <span id="reroll-count" class="bg-black px-2 py-0.5 rounded text-xs text-yellow-400">3 Left</span>
+                </button>
             </div>
         </div>
 
@@ -273,6 +283,8 @@
         // Upgrade System State
         let upgradeOptions = [];
         let selectedUpgradeIndex = 0;
+        let rerollsRemaining = 3;
+        let isRerollFocused = false;
 
         // Game Objects
         let player;
@@ -283,13 +295,14 @@
         let particles = [];
         let lightnings = []; 
         let activeMiniLightnings = 0;
+        let lastMiniEmitterTime = 0;
         let tsLightningContainer = null;
         let manualPause = false;
         let lingeringSparks = []; 
         let pulseWaves = [];
 
-        const MAX_ACTIVE_MINI_LIGHTNINGS = 24;
-
+        const MAX_ACTIVE_MINI_LIGHTNINGS = 16;
+       
         // Termination Reasons
         const TERMINATION_REASONS = [
             "We felt you weren't aligned with our core value of 'Synergistic Hustle'.",
@@ -306,17 +319,49 @@
 
         // Upgrade Pool - CLEANED DESCRIPTIONS + ADDED lvl2Text PROPERTY
         const UPGRADES = [
-            { id: 'email', name: 'Cold Email', type: 'WEAPON', desc: 'Fires rapid rejection emails at nearest candidate.', lvl2Text: 'Lvl 2 Perk: Reply All Splash Damage', icon: '📧' },
+            { id: 'email', name: 'Cold Email', type: 'WEAPON', desc: 'Fires rapid rejection emails at nearest candidate.', lvl2Text: 'Lvl 2 Perk: Chilling Slow', lvl5Text: 'Lvl 5 Perk: Cold Splash AoE', icon: '📧' },
             { id: 'aura', name: 'Networking Aura', type: 'WEAPON', desc: 'Damages anyone getting too close to your network.', lvl2Text: 'Lvl 2 Perk: Slows Enemies', icon: '🌐' },
             { id: 'offer', name: 'The Offer', type: 'WEAPON', desc: 'Slow moving, high damage projectile that pierces.', lvl2Text: 'Lvl 2 Perk: Stuns Enemies', icon: '💼' },
-            { id: 'referral', name: 'Referral Chain', type: 'WEAPON', desc: 'Arcs of lightning that bounce between candidates.', lvl2Text: 'Lvl 2 Perk: Ground Sparks', icon: '⚡' }, 
+            { id: 'referral', name: 'Referral Chain', type: 'WEAPON', desc: 'Long-range arcs that bounce between candidates.', lvl2Text: 'Lvl 2 Perk: Double Shotgun Count', icon: '⚡' }, 
             { id: 'coffee', name: 'Caffeine IV', type: 'PASSIVE', stat: 'speed', val: 0.05, desc: 'Move faster.', icon: '☕' },
             { id: 'linkedin', name: 'Premium Sub', type: 'PASSIVE', stat: 'pickupRange', val: 50, desc: 'Gather resumes from further away.', icon: '🔗' },
             { id: 'budget', name: 'Hiring Budget', type: 'PASSIVE', stat: 'damageMult', val: 0.1, desc: 'Increase all damage by 10%.', icon: '💰' },
-            { id: 'ats', name: 'ATS Filter', type: 'PASSIVE', stat: 'cooldownMult', val: -0.1, desc: 'Attack faster.', icon: '🤖' },
+            { id: 'ats', name: 'ATS Filter', type: 'PASSIVE', stat: 'attackSpeed', val: 0.1, desc: 'Attack faster.', icon: '🤖' },
             { id: 'bigdata', name: 'Big Data', type: 'PASSIVE', stat: 'areaMult', val: 0.2, desc: 'Increase size of projectiles and effects by 20%.', icon: '💾' },
             { id: 'growth', name: 'Hypergrowth', type: 'PASSIVE', stat: 'difficultyMult', val: 0.05, desc: 'Increase enemy spawn rate by 5% (More XP!).', icon: '📈' }
         ];
+
+        /**
+         * AUDIO SYSTEM
+         */
+        let lightningPlayers = null;
+        let pitchShift = null;
+
+        function initAudio() {
+            if (lightningPlayers) return;
+
+            // Create a PitchShift effect: -24 semitones (2 octaves down) 
+            // We play at 2x speed (+1 octave), so net result is -1 octave (Deep) and Fast.
+            pitchShift = new Tone.PitchShift(-60).toDestination();
+
+            lightningPlayers = new Tone.Players({
+                "lightning1": "sounds/lightning1.wav",
+                "lightning2": "sounds/lightning2.wav",
+                "lightning3": "sounds/lightning3.wav",
+                "lightning4": "sounds/lightning4.wav"
+            }).connect(pitchShift);
+        }
+
+        function playLightningSound() {
+            if (!lightningPlayers || !lightningPlayers.loaded) return;
+            
+            const rand = Math.floor(Math.random() * 4) + 1;
+            if (lightningPlayers.has(`lightning${rand}`)) {
+                const player = lightningPlayers.player(`lightning${rand}`);
+                player.playbackRate = 1;
+                player.start();
+            }
+        }
 
         /**
          * CORE CLASSES
@@ -328,11 +373,11 @@
                 this.y = WORLD_HEIGHT / 2;
                 this.radius = 15;
                 
-                // Physics Props - EVEN SLOWER
+                // Physics Props - MORE INERTIA
                 this.vx = 0;
                 this.vy = 0;
-                this.acceleration = 0.25; 
-                this.friction = 0.9; 
+                this.acceleration = 0.12; 
+                this.friction = 0.96; 
                 this.maxSpeed = 2.2; 
                 
                 // Stats
@@ -347,20 +392,17 @@
                 // Stats modifiers
                 this.pickupRange = 80;
                 this.damageMult = 1;
-                this.cooldownMult = 1;
+                this.attackSpeed = 1; // 1 = 100%
                 this.areaMult = 1; 
                 this.difficultyMult = 1; 
 
                 // Inventory
                 this.weapons = {
                     email: { level: 0, cooldown: 0, maxCooldown: 120, damage: 15 }, 
-                    aura: { level: 0, cooldown: 0, maxCooldown: 20, damage: 2, range: 70 }, 
+                    aura: { level: 0, cooldown: 0, maxCooldown: 20, damage: 2, range: 100 }, 
                     offer: { level: 0, cooldown: 0, maxCooldown: 240, damage: 50, range: 480 },
-                    referral: { level: 0, cooldown: 0, maxCooldown: 160, damage: 25, bounce: 3, range: 200 }
+                    referral: { level: 0, cooldown: 0, maxCooldown: 500, damageMin: 1, damageMax: 7, bounce: 3, range: 380 }
                 };
-
-                // Give starting weapon
-                this.weapons.referral.level = 2;
             }
 
             update(timeScale) {
@@ -523,15 +565,20 @@
             }
 
             handleWeapons(timeScale) {
+                // Calculate Range Multiplier from Area (0.2x effectiveness)
+                const rangeMult = 1 + (this.areaMult - 1) * 0.2;
+
                 // 1. Cold Email
+                const attackSpeedFactor = Math.max(0.1, this.attackSpeed);
+
                 if (this.weapons.email.level > 0) {
                     this.weapons.email.cooldown -= timeScale;
                     if (this.weapons.email.cooldown <= 0) {
-                        const target = getTarget(this.x, this.y, 400, 'nearest');
+                        const target = getTarget(this.x, this.y, 400 * rangeMult, 'nearest');
                         if (target) {
-                            const cd = Math.max(20, this.weapons.email.maxCooldown * (1 - (this.weapons.email.level * 0.1)) * this.cooldownMult);
-                            this.weapons.email.cooldown = cd;
-                            const dmg = (this.weapons.email.damage + (this.weapons.email.level * 5)) * this.damageMult;
+                            const baseCd = Math.max(20, this.weapons.email.maxCooldown * (1 - (this.weapons.email.level * 0.1)));
+                            this.weapons.email.cooldown = baseCd / attackSpeedFactor;
+                            const dmg = (this.weapons.email.damage + (Math.pow(this.weapons.email.level, 1.3))) * this.damageMult;
                             const angle = Math.atan2(target.y - this.y, target.x - this.x);
                             projectiles.push(new Projectile(this.x, this.y, angle, 'email', dmg));
                         }
@@ -564,10 +611,10 @@
                 if (this.weapons.offer.level > 0) {
                     this.weapons.offer.cooldown -= timeScale;
                     if (this.weapons.offer.cooldown <= 0) {
-                        const cd = Math.max(80, this.weapons.offer.maxCooldown * (1 - (this.weapons.offer.level * 0.15)) * this.cooldownMult);
-                        this.weapons.offer.cooldown = cd;
+                        const baseCd = Math.max(80, this.weapons.offer.maxCooldown * (1 - (this.weapons.offer.level * 0.15)));
+                        this.weapons.offer.cooldown = baseCd / attackSpeedFactor;
                         const dmg = (this.weapons.offer.damage + (this.weapons.offer.level * 15)) * this.damageMult;
-                        const offerRange = this.weapons.offer.range || 600;
+                        const offerRange = (this.weapons.offer.range || 600) * rangeMult;
                         const target = getTarget(this.x, this.y, offerRange, 'strongestNearest');
                         let angle = Math.random() * Math.PI * 2;
                         
@@ -583,37 +630,117 @@
                     this.weapons.referral.cooldown -= timeScale;
                     if (this.weapons.referral.cooldown <= 0) {
                         const stats = this.weapons.referral;
-                        const cd = Math.max(40, stats.maxCooldown * (1 - (stats.level * 0.1)) * this.cooldownMult);
-                        stats.cooldown = cd;
+                        const baseCd = Math.max(40, stats.maxCooldown * (1 - (stats.level * 0.1)));
+                        stats.cooldown = baseCd / attackSpeedFactor;
 
-                        let bounces = stats.bounce + Math.floor(stats.level / 2);
-                        const baseDamage = (stats.damage + (stats.level * 8)) * this.damageMult * 0.66;
-                        let damage = baseDamage;
-                        let currentSource = { x: this.x, y: this.y };
-                        let hitList = [];
-
-                        let target = getTarget(this.x, this.y, stats.range, 'weakest', hitList);
+                        // Shotgun 3 bolts (Doubles at Lvl 2)
+                        let shotCount = 3;
+                        if (stats.level >= 2) {
+                            shotCount *= 2; 
+                        }
                         
-                        while (target && bounces > 0) {
-                            target.takeDamage(damage, '#facc15');
-                            hitList.push(target);
-                            
-                            addLightningVisual(createLightningVisual(currentSource.x, currentSource.y, target.x, target.y, '#facc15', 'main', 50));
+                        let initialHitList = []; 
+                        let hasFired = false;
 
-                            if (stats.level >= 2) {
-                                const branchCount = stats.level >= 5 ? 2 : 1;
-                                const branchRange = stats.range * 0.55;
-                                const branchDamage = baseDamage * 0.35;
-                                const branchJumps = 2 + Math.floor(stats.level / 3);
-                                for (let b = 0; b < branchCount; b++) {
-                                    triggerMiniChainLightning(target, branchRange, branchDamage, { maxJumps: branchJumps, forbidden: [target] });
+                        for(let s=0; s<shotCount; s++) {
+                            // Always limit bounces to 3
+                            let bounces = 3; 
+                            
+                            // Range-based damage calculation
+                            const levelBonus = stats.level;
+                            // Updated formula: (stats.damageMax + levelBonus) * this.damageMult * 1.1
+                            // Min damage is half of max damage
+                            const maxDmgBase = (stats.damageMax + levelBonus) * this.damageMult * 1.1;
+                            let minDmgBase = maxDmgBase / 2;
+
+                            if (stats.level >= 5) {
+                                minDmgBase *= 1.5;
+                                bounces += 1;
+                            }
+                            
+                            let currentMin = minDmgBase;
+                            let currentMax = maxDmgBase;
+                            let currentSource = { x: this.x, y: this.y };
+                            
+                            // Visual Variant for Level 5+
+                            const visualVariant = stats.level >= 5 ? 'level5' : 'default';
+                            let currentWidth = stats.level >= 5 ? 6 : 3;
+                            
+                            // Use initialHitList to find unique starting targets, but don't pass it to the chain loop
+                            // because we want each chain to be able to bounce freely (except to itself)
+                            let target = getTarget(this.x, this.y, stats.range * rangeMult, 'weakest', initialHitList);
+                            
+                            if (target) {
+                                if (!hasFired) {
+                                    playLightningSound();
+                                    hasFired = true;
+                                }
+
+                                initialHitList.push(target);
+                                let chainHitList = [target]; // Prevent immediate back-bounce
+                                let accumulatedDelay = s * 5; // Slight stagger for visual flair
+
+                                // Process the first hit (the shotgun blast)
+                                const firstTarget = target;
+                                // Randomize damage for this instance
+                                const firstDamage = Math.random() * (currentMax - currentMin) + currentMin;
+
+                                addLightningVisual(createLightningVisual(currentSource.x, currentSource.y, target.x, target.y, '#facc15', 'main', 150, { 
+                                    delay: accumulatedDelay,
+                                    variant: visualVariant,
+                                    width: currentWidth,
+                                    onHit: () => {
+                                        if (firstTarget.hp > 0) {
+                                            firstTarget.takeDamage(firstDamage, '#facc15');
+                                        }
+                                    }
+                                }));
+                                
+                                accumulatedDelay += 20;
+                                currentSource = target;
+
+                                const scaleDown = 0.5;
+                                currentMin *= scaleDown;
+                                currentMax *= scaleDown;
+                                currentWidth = Math.max(1, currentWidth * 0.7); // Decay width
+
+                                // minimum damage should be 1
+                                if (currentMax < 1) currentMax = 1;
+                                if (currentMin < 1) currentMin = 1;
+
+                                // Continue the chain
+                                while (bounces > 0) {
+                                    target = getTarget(currentSource.x, currentSource.y, stats.range, 'random', chainHitList);
+                                    if (!target) break;
+
+                                    chainHitList.push(target);
+                                    
+                                    const currentTarget = target;
+                                    const currentDamage = Math.random() * (currentMax - currentMin) + currentMin;
+
+                                    addLightningVisual(createLightningVisual(currentSource.x, currentSource.y, target.x, target.y, '#facc15', 'main', 150, { 
+                                        delay: accumulatedDelay,
+                                        variant: visualVariant,
+                                        width: currentWidth,
+                                        onHit: () => {
+                                            if (currentTarget.hp > 0) {
+                                                currentTarget.takeDamage(currentDamage, '#facc15');
+                                            }
+                                        }
+                                    }));
+                                    
+                                    accumulatedDelay += 20;
+                                    currentSource = target;
+                                    bounces--;
+                                    currentMin *= scaleDown;
+                                    currentMax *= scaleDown;
+                                    currentWidth = Math.max(1, currentWidth * 0.7); // Decay width
+
+                                    // minimum damage should be 1
+                                    if (currentMax < 1) currentMax = 1;
+                                    if (currentMin < 1) currentMin = 1;
                                 }
                             }
-
-                            currentSource = target;
-                            bounces--;
-                            damage *= 0.9; 
-                            target = getTarget(currentSource.x, currentSource.y, stats.range, 'weakest', hitList);
                         }
                     }
                 }
@@ -986,6 +1113,9 @@
                 this.gravity = options.gravity || 0;
                 this.fade = options.fade !== undefined ? options.fade : true;
                 this.sizeDecay = options.sizeDecay || 0.98;
+                this.shape = options.shape || 'circle';
+                this.angle = options.angle || 0;
+                this.rotationSpeed = options.rotationSpeed || 0;
             }
             update(timeScale) {
                 this.vx *= Math.pow(this.friction, timeScale);
@@ -995,6 +1125,7 @@
                 this.y += this.vy * timeScale;
                 this.size *= Math.pow(this.sizeDecay, timeScale);
                 this.life -= timeScale;
+                this.angle += this.rotationSpeed * timeScale;
             }
             draw() {
                  if (this.x < camera.x || this.x > camera.x + canvas.width ||
@@ -1002,11 +1133,24 @@
 
                 const opacity = this.fade ? Math.max(0, this.life / this.startLife) : 1;
                 ctx.save();
+                ctx.translate(this.x, this.y);
+                ctx.rotate(this.angle);
                 ctx.fillStyle = this.color;
                 ctx.globalAlpha = opacity;
-                ctx.beginPath();
-                ctx.arc(this.x, this.y, Math.max(0, this.size), 0, Math.PI*2);
-                ctx.fill();
+                
+                if (this.shape === 'icicle') {
+                    // Draw a long shard
+                    ctx.beginPath();
+                    ctx.moveTo(0, -this.size);
+                    ctx.lineTo(this.size * 0.3, this.size);
+                    ctx.lineTo(-this.size * 0.3, this.size);
+                    ctx.closePath();
+                    ctx.fill();
+                } else {
+                    ctx.beginPath();
+                    ctx.arc(0, 0, Math.max(0, this.size), 0, Math.PI*2);
+                    ctx.fill();
+                }
                 ctx.restore();
             }
         }
@@ -1026,11 +1170,18 @@
                 record = -Infinity;
             }
 
+            let candidates = []; // For random selection
+
             for (let e of enemies) {
                 if (excludeList.includes(e)) continue;
                 
                 const dist = Math.hypot(e.x - x, e.y - y);
                 if (dist > range) continue;
+
+                if (type === 'random') {
+                    candidates.push(e);
+                    continue;
+                }
 
                 if (type === 'nearest') {
                     if (dist < record) {
@@ -1053,6 +1204,14 @@
                     }
                 }
             }
+
+            if (type === 'random') {
+                if (candidates.length > 0) {
+                    return candidates[Math.floor(Math.random() * candidates.length)];
+                }
+                return null;
+            }
+
             return best;
         }
         
@@ -1107,6 +1266,57 @@
             });
         }
 
+        function applyColdSlow(enemy, duration = 150) {
+            if (!enemy) return;
+            enemy.slowTimer = Math.max(enemy.slowTimer, duration);
+        }
+
+        function createColdSplash(x, y, damage, options = {}) {
+            const radius = (options.radius || 110); // Pass base radius, ArcWave handles areaMult
+            const slowDuration = options.slowDuration || 150;
+            const ignoredTarget = options.ignoredTarget || null;
+            const angle = options.angle || 0;
+
+            // Use ArcWave for U-shape shield effect - Handles Damage Now
+            pulseWaves.push(new ArcWave(x, y, angle, radius, damage, slowDuration, ignoredTarget));
+            
+            // Directional particle burst (Backwards from impact) - SNOWY
+            createParticleBurst({
+                x,
+                y,
+                count: 24, // More snow
+                color: '#ffffff',
+                palette: ['#ffffff', '#e0f2fe', '#dbeafe'],
+                speed: 3.0,
+                life: 45,
+                size: 2.5,
+                gravity: 0.02, // Gentle fall
+                friction: 0.94,
+                fade: true,
+                spread: Math.PI * 0.9, // Wide cone
+                direction: angle + Math.PI // Opposite to projectile direction
+            });
+
+            // ICICLES (Bigger, sharper shards)
+            createParticleBurst({
+                x,
+                y,
+                count: 8, 
+                color: '#bae6fd',
+                palette: ['#bae6fd', '#7dd3fc', '#ffffff'],
+                speed: 4.5, // Faster explosion
+                life: 80, // ~1.3 seconds
+                size: 12.0, // Much bigger
+                gravity: 0.05, 
+                friction: 0.92,
+                fade: true,
+                spread: Math.PI * 0.7, 
+                direction: angle + Math.PI,
+                shape: 'icicle',
+                sizeDecay: 0.99 // Don't shrink too fast
+            });
+        }
+
         function addLightningVisual(visual) {
             if (!visual) return;
             if (visual.type === 'mini') {
@@ -1116,255 +1326,288 @@
             lightnings.push(visual);
         }
 
-        function createParticleBurst({ x, y, count = 12, color = '#ffffff', palette = null, speed = 2, life = 25, size = 2, spread = Math.PI * 2, gravity = 0, fade = true, friction = 0.88, sizeDecay = 0.97 }) {
+        function createParticleBurst({ x, y, count = 12, color = '#ffffff', palette = null, speed = 2, life = 25, size = 2, spread = Math.PI * 2, direction = 0, gravity = 0, fade = true, friction = 0.88, sizeDecay = 0.97, shape = 'circle' }) {
             for (let i = 0; i < count; i++) {
-                const angle = (Math.random() * spread) - (spread / 2);
+                const angle = direction + (Math.random() * spread) - (spread / 2);
                 const magnitude = (0.3 + Math.random()) * speed;
                 const vx = Math.cos(angle) * magnitude;
                 const vy = Math.sin(angle) * magnitude;
                 const particleLife = life + Math.random() * life * 0.3;
                 const particleSize = size + Math.random() * size * 0.5;
                 const chosenColor = Array.isArray(palette) && palette.length ? palette[Math.floor(Math.random() * palette.length)] : color;
-                particles.push(new Particle(x, y, chosenColor || color, { x: vx, y: vy }, particleLife, particleSize, { gravity, fade, friction, sizeDecay }));
+                
+                // Random rotation for icicles
+                const rotationSpeed = shape === 'icicle' ? (Math.random() - 0.5) * 0.2 : 0;
+                const initialAngle = shape === 'icicle' ? Math.random() * Math.PI * 2 : 0;
+
+                particles.push(new Particle(x, y, chosenColor || color, { x: vx, y: vy }, particleLife, particleSize, { gravity, fade, friction, sizeDecay, shape, angle: initialAngle, rotationSpeed }));
             }
         }
 
-        function generateLightningPath(x1, y1, x2, y2, options = {}) {
-            const { iterations = 4, sway = 40 } = options;
-            let path = [{ x: x1, y: y1 }, { x: x2, y: y2 }];
-            let currentSway = sway;
+        class ArcWave {
+            constructor(x, y, angle, maxRadius, damage, slowDuration, ignoredTarget) {
+                this.x = x;
+                this.y = y;
+                this.angle = angle;
+                this.radius = 10;
+                this.maxRadius = maxRadius * player.areaMult;
+                this.life = 1.0;
+                this.speed = 5;
+                
+                // Damage Logic
+                this.damage = damage;
+                this.slowDuration = slowDuration;
+                this.ignoredTarget = ignoredTarget;
+                this.hitList = [];
+            }
+            update(timeScale) {
+                this.radius += this.speed * timeScale;
+                this.life -= 0.03 * timeScale;
 
-            for (let i = 0; i < iterations; i++) {
-                const nextPath = [path[0]];
-                for (let j = 0; j < path.length - 1; j++) {
-                    const start = path[j];
-                    const end = path[j + 1];
-                    const midX = (start.x + end.x) / 2;
-                    const midY = (start.y + end.y) / 2;
-                    const dx = end.x - start.x;
-                    const dy = end.y - start.y;
-                    const dist = Math.hypot(dx, dy) || 1;
-                    const nx = -dy / dist;
-                    const ny = dx / dist;
-                    const offset = (Math.random() * 2 - 1) * currentSway;
-                    const jitterX = (Math.random() - 0.5) * currentSway * 0.2;
-                    const jitterY = (Math.random() - 0.5) * currentSway * 0.2;
-                    nextPath.push({
-                        x: midX + nx * offset + jitterX,
-                        y: midY + ny * offset + jitterY
+                // Collision Check (Wave Front)
+                if (this.life > 0) {
+                    const waveThickness = 25; // Thickness of the damaging wave
+                    const innerRadius = this.radius - waveThickness;
+                    
+                    enemies.forEach(e => {
+                        if (e === this.ignoredTarget || this.hitList.includes(e)) return;
+                        
+                        const dist = Math.hypot(e.x - this.x, e.y - this.y);
+                        
+                        // Check if enemy is within the wave band
+                        if (dist <= this.radius + e.radius && dist >= innerRadius - e.radius) {
+                            // Check Angle
+                            const angleToEnemy = Math.atan2(e.y - this.y, e.x - this.x);
+                            let angleDiff = angleToEnemy - this.angle;
+                            while (angleDiff > Math.PI) angleDiff -= Math.PI * 2;
+                            while (angleDiff < -Math.PI) angleDiff += Math.PI * 2;
+
+                            // Match visual arc width (0.3 PI)
+                            if (Math.abs(angleDiff) <= 0.3 * Math.PI) {
+                                e.takeDamage(this.damage, '#bae6fd', true);
+                                applyColdSlow(e, this.slowDuration);
+                                this.hitList.push(e);
+                            }
+                        }
                     });
-                    nextPath.push(end);
                 }
-                path = nextPath;
-                currentSway *= 0.55;
             }
-            return path;
-        }
+            draw() {
+                if (this.life <= 0) return;
+                ctx.save();
+                ctx.translate(this.x, this.y);
+                ctx.rotate(this.angle);
+                
+                // Draw U shape (Shield Impact)
+                ctx.beginPath();
+                // Arc facing forward (shockwave)
+                ctx.arc(0, 0, this.radius, -Math.PI * 0.3, Math.PI * 0.3);
+                ctx.strokeStyle = `rgba(186, 230, 253, ${this.life})`; // Light Blue
+                ctx.lineWidth = 6 + (1-this.life)*6;
+                ctx.lineCap = 'round';
+                ctx.stroke();
+                
+                // Inner echo
+                ctx.beginPath();
+                ctx.arc(0, 0, this.radius * 0.7, -Math.PI * 0.2, Math.PI * 0.2);
+                ctx.strokeStyle = `rgba(224, 242, 254, ${this.life * 0.7})`; // Lighter Blue
+                ctx.lineWidth = 3;
+                ctx.stroke();
 
-        function jitterPoints(points, magnitude) {
-            if (!points) return [];
-            return points.map(p => ({
-                x: p.x + (Math.random() - 0.5) * magnitude,
-                y: p.y + (Math.random() - 0.5) * magnitude
-            }));
-        }
-
-        function simplifyLightningPoints(points, stride = 2) {
-            if (!Array.isArray(points) || points.length <= 2 || stride <= 1) return points;
-            const simplified = [];
-            for (let i = 0; i < points.length; i += stride) {
-                simplified.push(points[i]);
-            }
-            const lastPoint = points[points.length - 1];
-            if (simplified[simplified.length - 1] !== lastPoint) simplified.push(lastPoint);
-            return simplified;
-        }
-
-        function worldToScreen(x, y) {
-            return {
-                x: x - camera.x,
-                y: y - camera.y
-            };
-        }
-
-        async function initLightningParticles() {
-            if (tsLightningContainer || !window.tsParticles) return;
-            const layer = document.getElementById('ts-lightning-layer');
-            if (!layer) return;
-            try {
-                tsLightningContainer = await tsParticles.load('ts-lightning-layer', {
-                    background: { color: { value: 'transparent' } },
-                    fullScreen: { enable: false },
-                    detectRetina: true,
-                    fpsLimit: 60,
-                    particles: {
-                        number: { value: 0 },
-                        color: { value: ['#e0f2fe', '#93c5fd', '#bae6fd'] },
-                        opacity: { value: { min: 0.2, max: 0.9 } },
-                        size: { value: { min: 1, max: 2 } },
-                        life: { duration: { sync: true, value: 0.3 }, count: 1 },
-                        move: {
-                            enable: true,
-                            speed: { min: 40, max: 80 },
-                            direction: 'none',
-                            outModes: { default: 'destroy' }
-                        },
-                        shape: { type: 'circle' }
-                    },
-                    emitters: []
-                });
-            } catch (err) {
-                console.warn('tsParticles lightning init failed', err);
+                ctx.restore();
             }
         }
 
-        function spawnMiniLightningEffect(worldX, worldY) {
-            if (!tsLightningContainer || typeof tsLightningContainer.addEmitter !== 'function') return;
-            const pos = worldToScreen(worldX, worldY);
-            if (pos.x < 0 || pos.x > canvas.width || pos.y < 0 || pos.y > canvas.height) return;
-            const emitter = tsLightningContainer.addEmitter({
-                autoPlay: true,
-                life: { duration: 0.25, count: 1 },
-                rate: { quantity: 18, delay: 0.004 },
-                position: { x: pos.x, y: pos.y },
-                size: { width: 0, height: 0 },
-                particles: {
-                    number: { value: 0 },
-                    color: { value: ['#e0f2fe', '#7dd3fc', '#bfdbfe'] },
-                    opacity: { value: { min: 0.3, max: 1 } },
-                    size: { value: { min: 1, max: 2.5 } },
-                    life: { duration: { sync: false, value: { min: 0.2, max: 0.4 } }, count: 1 },
-                    move: {
-                        enable: true,
-                        direction: 'outside',
-                        speed: { min: 30, max: 90 },
-                        outModes: { default: 'destroy' }
-                    },
-                    rotate: {
-                        value: { min: 0, max: 360 },
-                        direction: 'random',
-                        animation: { enable: true, speed: 45 }
-                    },
-                    shape: { type: ['circle', 'square'] }
+        class LightningBolt {
+            constructor(x1, y1, x2, y2, color, duration = 30, delay = 0, onHit = null, options = {}) {
+                this.x1 = x1;
+                this.y1 = y1;
+                this.x2 = x2;
+                this.y2 = y2;
+                this.color = color;
+                this.life = duration;
+                this.maxLife = duration;
+                this.dead = false;
+                this.delay = delay;
+                this.onHit = onHit;
+                this.hasHit = false;
+                this.tendrils = [];
+                this.branches = [];
+                this.variant = options.variant || 'default';
+                
+                // Allow width override, or default based on variant
+                const baseWidth = options.width || (this.variant === 'level5' ? 5 : 3);
+
+                // Create 1 distinct tendril
+                for(let i=0; i<1; i++) {
+                    const path = this.generatePath(x1, y1, x2, y2);
+                    this.tendrils.push({
+                        path: path,
+                        width: baseWidth,
+                        speed: 0.04 + Math.random() * 0.02, // Speed of travel
+                        head: 0, // 0 to 1
+                        tail: 0, // 0 to 1
+                        length: 0.3 + Math.random() * 0.2 // Length of the tendril
+                    });
+
+                    // Generate branches for Level 5
+                    if (this.variant === 'level5') {
+                        const numBranches = Math.floor(Math.random() * 3) + 2;
+                        for(let b=0; b<numBranches; b++) {
+                            const spawnIdx = Math.floor(Math.random() * (path.length - 2)) + 1;
+                            const spawnPoint = path[spawnIdx];
+                            const angle = Math.random() * Math.PI * 2;
+                            const len = 30 + Math.random() * 30;
+                            const endX = spawnPoint.x + Math.cos(angle) * len;
+                            const endY = spawnPoint.y + Math.sin(angle) * len;
+                            
+                            this.branches.push({
+                                path: this.generatePath(spawnPoint.x, spawnPoint.y, endX, endY, 20), // Less sway
+                                parentIdx: spawnIdx,
+                                width: 2,
+                                life: 1.0
+                            });
+                        }
+                    }
                 }
-            });
-
-            if (emitter) {
-                setTimeout(() => emitter.stop && emitter.stop(), 400);
             }
-        }
 
+            generatePath(x1, y1, x2, y2, initialSway = 80) {
+                let points = [{x:x1, y:y1}, {x:x2, y:y2}];
+                let sway = initialSway;
+                for(let i=0; i<5; i++) {
+                    const nextPoints = [points[0]];
+                    for(let j=0; j<points.length-1; j++) {
+                        const start = points[j];
+                        const end = points[j+1];
+                        const midX = (start.x + end.x)/2;
+                        const midY = (start.y + end.y)/2;
+                        const dx = end.x - start.x;
+                        const dy = end.y - start.y;
+                        const dist = Math.hypot(dx, dy);
+                        const nx = -dy/dist;
+                        const ny = dx/dist;
+                        const offset = (Math.random() - 0.5) * sway;
+                        nextPoints.push({
+                            x: midX + nx * offset,
+                            y: midY + ny * offset
+                        });
+                        nextPoints.push(end);
+                    }
+                    points = nextPoints;
+                    sway *= 0.5;
+                }
+                return points;
+            }
 
-        function spawnLightningEmbers(points, color, intensity) {
-            if (!points || points.length === 0) return;
-            const samples = Math.max(1, Math.floor(points.length * intensity));
-            for (let i = 0; i < samples; i++) {
-                const idx = Math.floor(Math.random() * points.length);
-                const p = points[idx];
-                createParticleBurst({
-                    x: p.x,
-                    y: p.y,
-                    count: 6,
-                    color,
-                    palette: [color, '#ffffff', '#e0f2fe'],
-                    speed: 1.5 + intensity,
-                    life: 20,
-                    size: 1.5,
-                    gravity: 0.02,
-                    friction: 0.85,
-                    sizeDecay: 0.93
+            update(timeScale) {
+                if (this.delay > 0) {
+                    this.delay -= timeScale;
+                    return;
+                }
+
+                let allDead = true;
+                let anyHit = false;
+                this.tendrils.forEach(t => {
+                    t.head += t.speed * timeScale;
+                    t.tail = Math.max(0, t.head - t.length);
+                    if (t.tail < 1) allDead = false;
+                    if (t.head >= 1) anyHit = true;
                 });
+
+                if (anyHit && !this.hasHit) {
+                    this.hasHit = true;
+                    if (this.onHit) this.onHit();
+                }
+
+                if (allDead) this.dead = true;
             }
-        }
 
-        function spawnLightningBranches(points, color, life) {
-            if (!points || points.length < 3) return;
-            const count = Math.min(3, Math.max(1, Math.floor(points.length / 6)));
-            for (let i = 0; i < count; i++) {
-                const anchor = points[Math.floor(Math.random() * points.length)];
-                const angle = Math.random() * Math.PI * 2;
-                const length = 40 + Math.random() * 80;
-                const bx = anchor.x + Math.cos(angle) * length;
-                const by = anchor.y + Math.sin(angle) * length;
-                const branch = createLightningVisual(anchor.x, anchor.y, bx, by, color, 'spark', life * 0.35, { spawnBranches: false });
-                addLightningVisual(branch);
+            draw(ctx) {
+                if (this.delay > 0) return;
+
+                ctx.save();
+                ctx.lineCap = 'round';
+                ctx.lineJoin = 'round';
+                ctx.globalCompositeOperation = 'lighter';
+
+                this.tendrils.forEach(t => {
+                    if (t.head <= 0 || t.tail >= 1) return;
+                    
+                    const totalPoints = t.path.length;
+                    const startIdx = Math.floor(t.tail * (totalPoints - 1));
+                    const endIdx = Math.min(totalPoints - 1, Math.ceil(t.head * (totalPoints - 1)));
+                    
+                    if (startIdx >= endIdx) return;
+
+                    // Draw Branches first (if active)
+                    if (this.variant === 'level5') {
+                        this.branches.forEach(b => {
+                            // Only draw branch if the main bolt has passed its spawn point
+                            if (t.head * (totalPoints - 1) > b.parentIdx && t.tail * (totalPoints - 1) < b.parentIdx) {
+                                ctx.beginPath();
+                                ctx.moveTo(b.path[0].x, b.path[0].y);
+                                for(let i=1; i<b.path.length; i++) ctx.lineTo(b.path[i].x, b.path[i].y);
+
+                                // Branch Style: Blue Glow + White Core
+                                ctx.shadowBlur = 8;
+                                ctx.shadowColor = '#3b82f6'; // Blue
+                                ctx.strokeStyle = '#3b82f6';
+                                ctx.lineWidth = b.width + 2;
+                                ctx.stroke();
+
+                                ctx.shadowBlur = 0;
+                                ctx.strokeStyle = '#ffffff'; // White
+                                ctx.lineWidth = b.width;
+                                ctx.stroke();
+                            }
+                        });
+                    }
+
+                    // Main Bolt Drawing
+                    ctx.beginPath();
+                    ctx.moveTo(t.path[startIdx].x, t.path[startIdx].y);
+                    for(let i = startIdx + 1; i <= endIdx; i++) {
+                        ctx.lineTo(t.path[i].x, t.path[i].y);
+                    }
+
+                    if (this.variant === 'level5') {
+                        // 1. Blue Outer Glow
+                        ctx.shadowBlur = 15;
+                        ctx.shadowColor = '#3b82f6'; // Blue
+                        ctx.strokeStyle = '#3b82f6';
+                        ctx.lineWidth = t.width + 4;
+                        ctx.stroke();
+
+                        // 2. Yellow Middle
+                        ctx.shadowBlur = 0;
+                        ctx.strokeStyle = '#facc15'; // Yellow
+                        ctx.lineWidth = t.width + 1;
+                        ctx.stroke();
+
+                        // 3. White Core
+                        ctx.strokeStyle = '#ffffff';
+                        ctx.lineWidth = 2;
+                        ctx.stroke();
+                    } else {
+                        ctx.shadowBlur = 10;
+                        ctx.shadowColor = this.color;
+                        ctx.strokeStyle = this.color;
+                        ctx.lineWidth = t.width;
+                        ctx.stroke();
+                    }
+                });
+                ctx.restore();
             }
-        }
-
-        function triggerMiniChainLightning(origin, range, damage, options = {}) {
-            if (!origin || damage <= 0) return [];
-            const { maxJumps = 3, forbidden = [] } = options;
-            let jumps = maxJumps;
-            let currentSource = origin;
-            const hits = [];
-            const initialForbidden = Array.isArray(forbidden) ? forbidden.filter(Boolean) : (forbidden ? [forbidden] : []);
-            const blockedSet = new Set(initialForbidden);
-            blockedSet.add(origin);
-            const excludeArr = Array.from(blockedSet);
-
-            while (jumps > 0) {
-                const nextTarget = getTarget(currentSource.x, currentSource.y, range, 'weakest', excludeArr);
-                if (!nextTarget) break;
-
-                nextTarget.takeDamage(damage, '#93c5fd', true);
-                addLightningVisual(createLightningVisual(currentSource.x, currentSource.y, nextTarget.x, nextTarget.y, '#93c5fd', 'mini', 90));
-                spawnMiniLightningEffect(nextTarget.x, nextTarget.y);
-                hits.push(nextTarget);
-
-                blockedSet.add(nextTarget);
-                excludeArr.push(nextTarget);
-                currentSource = nextTarget;
-                jumps--;
-            }
-            return hits;
         }
 
         function createLightningVisual(x1, y1, x2, y2, color, type = 'main', life = 50, options = {}) {
-            const isMini = type === 'mini';
-            const isSpark = type === 'spark';
-            const spawnBranches = options.spawnBranches !== undefined ? options.spawnBranches : type === 'main';
-            const dx = x2 - x1;
-            const dy = y2 - y1;
-            const dist = Math.max(1, Math.hypot(dx, dy));
-            const baseThickness = isMini ? 3 : isSpark ? 2 : 6;
-            const iterations = isMini ? 2 : isSpark ? 2 : 4;
-            const sway = dist * (isMini ? 0.1 : isSpark ? 0.08 : 0.22);
-            let corePath = generateLightningPath(x1, y1, x2, y2, { iterations, sway });
-            if (isMini) corePath = simplifyLightningPoints(corePath, 2);
-            const layerCount = isMini ? 1 : isSpark ? 1 : 3;
-            const layers = [];
-
-            for (let i = 0; i < layerCount; i++) {
-                const magnitude = sway * (0.08 + i * 0.05);
-                const layerPoints = i === 0 ? corePath : jitterPoints(corePath, magnitude);
-                layers.push({
-                    points: layerPoints,
-                    thickness: Math.max(1, baseThickness - i * 0.9),
-                    opacity: Math.max(0.25, 1 - i * 0.25)
-                });
-            }
-
-            const visual = {
-                x1,
-                y1,
-                x2,
-                y2,
-                points: corePath,
-                layers,
-                color,
-                life,
-                maxLife: life,
-                type,
-                thickness: baseThickness
-            };
-
-            spawnLightningEmbers(corePath, isMini ? '#60a5fa' : '#fde047', isMini ? 0.18 : 0.65);
-            if (spawnBranches && type === 'main') {
-                const branchColor = '#facc15';
-                spawnLightningBranches(corePath, branchColor, life);
-            }
-            return visual;
+            const delay = options.delay || 0;
+            const onHit = options.onHit || null;
+            return new LightningBolt(x1, y1, x2, y2, color, life, delay, onHit, options);
         }
+
+        function initLightningParticles() {} // No-op
 
         function spawnEnemy(typeOverride = null, ignoreCap = false, x = undefined, y = undefined) {
             // Use Difficulty Mult for spawn cap
@@ -1467,7 +1710,50 @@
             gameState = 'PAUSED';
             Object.keys(keys).forEach(k => keys[k] = false);
             const overlay = document.getElementById('pause-overlay');
-            if (overlay) overlay.classList.remove('hidden');
+            if (overlay) {
+                overlay.classList.remove('hidden');
+                
+                // Populate Stats
+                const container = document.getElementById('pause-stats');
+                if (container) {
+                    container.innerHTML = '';
+                    const weaponIcons = { email: '📧', aura: '🌐', offer: '💼', referral: '⚡' };
+                    const weaponNames = { email: 'Cold Email', aura: 'Networking Aura', offer: 'The Offer', referral: 'Referral Chain' };
+                    
+                    let hasWeapons = false;
+                    for (const [id, weapon] of Object.entries(player.weapons)) {
+                        if (weapon.level > 0) {
+                            hasWeapons = true;
+                            const card = document.createElement('div');
+                            card.className = 'bg-gray-800 p-3 rounded border border-gray-600 flex flex-col gap-2 text-left';
+                            
+                            let stats = [];
+                            if (weapon.damage) stats.push(`DMG: ${Math.floor(weapon.damage)}`);
+                            if (weapon.damageMin) stats.push(`DMG: ${weapon.damageMin}-${weapon.damageMax}`);
+                            if (weapon.maxCooldown) stats.push(`CD: ${(weapon.maxCooldown/60).toFixed(1)}s`);
+                            if (weapon.range) stats.push(`RNG: ${weapon.range}`);
+                            if (weapon.bounce) stats.push(`BNC: ${weapon.bounce}`);
+
+                            card.innerHTML = `
+                                <div class="flex items-center gap-2 border-b border-gray-700 pb-2">
+                                    <span class="text-2xl">${weaponIcons[id]}</span>
+                                    <div>
+                                        <div class="font-bold text-yellow-400 text-sm">${weaponNames[id]}</div>
+                                        <div class="text-xs text-gray-400">Level ${weapon.level}</div>
+                                    </div>
+                                </div>
+                                <div class="grid grid-cols-2 gap-1 text-xs font-mono text-gray-300">
+                                    ${stats.map(s => `<div>${s}</div>`).join('')}
+                                </div>
+                            `;
+                            container.appendChild(card);
+                        }
+                    }
+                    if (!hasWeapons) {
+                        container.innerHTML = '<div class="col-span-1 md:col-span-2 text-center text-gray-500 italic">No active requisitions (weapons) yet.</div>';
+                    }
+                }
+            }
         }
 
         function resumeManualPause() {
@@ -1483,28 +1769,69 @@
         function handleUpgradeInput(e) {
             if (upgradeOptions.length === 0) return;
 
+            // Navigate Left / Right (Cards)
             if (e.key === 'ArrowLeft' || e.key === 'a' || e.key === 'A') {
-                selectedUpgradeIndex = (selectedUpgradeIndex - 1 + upgradeOptions.length) % upgradeOptions.length;
-                highlightSelectedUpgrade();
-            } else if (e.key === 'ArrowRight' || e.key === 'd' || e.key === 'D') {
-                selectedUpgradeIndex = (selectedUpgradeIndex + 1) % upgradeOptions.length;
-                highlightSelectedUpgrade();
-            } else if (e.key === 'Enter' || e.key === ' ') {
-                selectUpgrade(upgradeOptions[selectedUpgradeIndex].id);
+                if (!isRerollFocused) {
+                    selectedUpgradeIndex = (selectedUpgradeIndex - 1 + upgradeOptions.length) % upgradeOptions.length;
+                    highlightSelectedUpgrade();
+                }
+            } 
+            else if (e.key === 'ArrowRight' || e.key === 'd' || e.key === 'D') {
+                if (!isRerollFocused) {
+                    selectedUpgradeIndex = (selectedUpgradeIndex + 1) % upgradeOptions.length;
+                    highlightSelectedUpgrade();
+                }
+            }
+            // Navigate Down (Focus Reroll)
+            else if (e.key === 'ArrowDown' || e.key === 's' || e.key === 'S') {
+                if (!isRerollFocused && rerollsRemaining > 0) {
+                    isRerollFocused = true;
+                    highlightSelectedUpgrade();
+                }
+            }
+            // Navigate Up (Focus Cards)
+            else if (e.key === 'ArrowUp' || e.key === 'w' || e.key === 'W') {
+                if (isRerollFocused) {
+                    isRerollFocused = false;
+                    highlightSelectedUpgrade();
+                }
+            }
+            // Confirm
+            else if (e.key === 'Enter' || e.key === ' ') {
+                if (isRerollFocused) {
+                    rerollUpgrades();
+                } else {
+                    selectUpgrade(upgradeOptions[selectedUpgradeIndex].id);
+                }
+            }
+            // Reroll Shortcut (R)
+            else if (e.key === 'r' || e.key === 'R') {
+                rerollUpgrades();
             }
         }
 
         function highlightSelectedUpgrade() {
+            // Handle Cards
             for (let i = 0; i < upgradeOptions.length; i++) {
                 const card = document.getElementById(`upgrade-card-${i}`);
                 if (!card) continue;
                 
-                if (i === selectedUpgradeIndex) {
+                if (!isRerollFocused && i === selectedUpgradeIndex) {
                     card.classList.remove('border-gray-600');
                     card.classList.add('border-white', 'bg-gray-700', 'scale-105', 'shadow-lg', 'shadow-blue-500/50');
                 } else {
                     card.classList.add('border-gray-600');
                     card.classList.remove('border-white', 'bg-gray-700', 'scale-105', 'shadow-lg', 'shadow-blue-500/50');
+                }
+            }
+
+            // Handle Reroll Button
+            const rerollBtn = document.getElementById('reroll-btn');
+            if (rerollBtn) {
+                if (isRerollFocused) {
+                    rerollBtn.classList.add('ring-2', 'ring-yellow-400', 'scale-105');
+                } else {
+                    rerollBtn.classList.remove('ring-2', 'ring-yellow-400', 'scale-105');
                 }
             }
         }
@@ -1514,7 +1841,10 @@
             canvas.height = window.innerHeight;
         }
 
-        function startGame() {
+        async function startGame() {
+            await Tone.start();
+            initAudio();
+
             document.getElementById('start-screen').classList.add('hidden');
             document.getElementById('hud').classList.remove('hidden');
             if (window.innerWidth < 768) {
@@ -1539,13 +1869,16 @@
             frameCount = 0;
             bossSpawned = false;
             currentBossTier = 0; 
+            rerollsRemaining = 3;
             camera = { x: 0, y: 0, shake: 0 };
             
             updateHUD();
 
-            gameState = 'PLAYING';
+            gameState = 'PAUSED';
             lastTime = performance.now();
             animate(lastTime);
+            
+            showUpgrades(true);
             
             setInterval(() => {
                 if (gameState === 'PLAYING') {
@@ -1587,18 +1920,46 @@
             }, 1000);
         }
 
-        function showUpgrades() {
+        function showUpgrades(isInitial = false) {
             const container = document.getElementById('upgrade-container');
+            const title = document.getElementById('upgrade-title');
+            
+            if (isInitial) {
+                title.innerText = "9AM";
+            } else {
+                title.innerText = "PROMOTION AVAILABLE!";
+            }
+
             container.innerHTML = '';
             upgradeOptions = []; 
-            const available = [...UPGRADES]; 
+            
+            let available = [...UPGRADES];
+            if (isInitial) {
+                available = available.filter(u => u.type === 'WEAPON');
+            }
+
             while(upgradeOptions.length < 3 && available.length > 0) {
                 const idx = Math.floor(Math.random() * available.length);
                 upgradeOptions.push(available[idx]);
                 available.splice(idx, 1); 
             }
             selectedUpgradeIndex = 0; 
+            isRerollFocused = false;
             document.getElementById('upgrade-screen').classList.remove('hidden');
+
+            // Update Reroll Button
+            const btn = document.getElementById('reroll-btn');
+            const countSpan = document.getElementById('reroll-count');
+            
+            countSpan.innerText = `${rerollsRemaining} Left`;
+            
+            if (rerollsRemaining > 0) {
+                btn.disabled = false;
+                btn.classList.remove('opacity-50', 'cursor-not-allowed');
+            } else {
+                btn.disabled = true;
+                btn.classList.add('opacity-50', 'cursor-not-allowed');
+            }
 
             upgradeOptions.forEach((u, index) => {
                 const isWeapon = u.type === 'WEAPON';
@@ -1613,8 +1974,13 @@
 
                 // Description Logic (Conditional Lvl 2 Text)
                 let description = u.desc;
-                if (isWeapon && (currentLevel + 1) === 2 && u.lvl2Text) {
-                    description += `<div class="text-yellow-300 font-bold mt-2 text-xs animate-pulse">✨ ${u.lvl2Text}</div>`;
+                if (isWeapon) {
+                    const nextLevel = currentLevel + 1;
+                    if (nextLevel === 2 && u.lvl2Text) {
+                        description += `<div class="text-yellow-300 font-bold mt-2 text-xs animate-pulse">✨ ${u.lvl2Text}</div>`;
+                    } else if (nextLevel === 5 && u.lvl5Text) {
+                        description += `<div class="text-blue-300 font-bold mt-2 text-xs animate-pulse">❄️ ${u.lvl5Text}</div>`;
+                    }
                 }
 
                 const card = document.createElement('div');
@@ -1644,6 +2010,13 @@
                 card.onclick = () => selectUpgrade(u.id);
                 container.appendChild(card);
             });
+        }
+
+        function rerollUpgrades() {
+            if (rerollsRemaining > 0) {
+                rerollsRemaining--;
+                showUpgrades();
+            }
         }
 
         function selectUpgrade(id) {
@@ -1695,17 +2068,32 @@
             document.getElementById('stat-dmg').innerText = player.damageMult.toFixed(2) + 'x';
             document.getElementById('stat-area').innerText = player.areaMult.toFixed(2) + 'x';
             document.getElementById('stat-diff').innerText = player.difficultyMult.toFixed(2) + 'x';
-            document.getElementById('stat-cdr').innerText = player.cooldownMult.toFixed(2) + 'x';
+            document.getElementById('stat-cdr').innerText = Math.round(player.attackSpeed * 100) + '%';
             document.getElementById('stat-range').innerText = player.pickupRange;
 
             const weaponGrid = document.getElementById('weapon-grid');
             weaponGrid.innerHTML = ''; 
             const weaponIcons = { email: '📧', aura: '🌐', offer: '💼', referral: '⚡' };
+            const weaponNames = { email: 'Cold Email', aura: 'Networking Aura', offer: 'The Offer', referral: 'Referral Chain' };
+
             for (const [id, weapon] of Object.entries(player.weapons)) {
                 if (weapon.level > 0) {
                     const badge = document.createElement('div');
-                    badge.className = 'bg-gray-700 px-2 py-1 rounded border border-gray-500 flex items-center gap-1';
-                    badge.innerHTML = `<span class="text-base">${weaponIcons[id]}</span> <span class="text-yellow-400 font-bold">${weapon.level}</span>`;
+                    badge.className = 'bg-gray-700 px-2 py-1 rounded border border-gray-500 flex items-center gap-1 pointer-events-auto relative group cursor-help';
+                    
+                    let details = `Lvl ${weapon.level}`;
+                    if (weapon.damage) details += `\nDmg: ${Math.floor(weapon.damage)}`;
+                    if (weapon.damageMin) details += `\nDmg: ${weapon.damageMin}-${weapon.damageMax}`;
+                    if (weapon.maxCooldown) details += `\nCD: ${(weapon.maxCooldown/60).toFixed(1)}s`;
+                    if (weapon.range) details += `\nRng: ${weapon.range}`;
+
+                    const tooltip = `
+                        <div class="absolute top-full left-1/2 transform -translate-x-1/2 mt-2 w-32 bg-black/90 border border-gray-600 p-2 rounded text-[10px] text-left z-50 hidden group-hover:block shadow-xl whitespace-pre-wrap font-mono pointer-events-none">
+                            <div class="text-yellow-400 font-bold mb-1 border-b border-gray-700 pb-1">${weaponNames[id]}</div>${details}
+                        </div>
+                    `;
+
+                    badge.innerHTML = `<span class="text-base">${weaponIcons[id]}</span> <span class="text-yellow-400 font-bold">${weapon.level}</span>${tooltip}`;
                     weaponGrid.appendChild(badge);
                 }
             }
@@ -1868,10 +2256,33 @@
                         
                         p.hitList.push(e.id); // Push ID
 
-                        if (p.type === 'email' && player.weapons.email.level >= 2) {
-                            // Pass e as ignored target, add "pop" particle
-                            createExplosion(p.x, p.y, '#ffffff', 8);
-                            createSplash(p.x, p.y, p.damage * 0.5, e);
+                        if (p.type === 'email') {
+                            const emailLevel = player.weapons.email.level;
+                            if (emailLevel >= 2) {
+                                applyColdSlow(e, 150 + (emailLevel * 10));
+                                // Snow Effect
+                                createParticleBurst({
+                                    x: p.x,
+                                    y: p.y,
+                                    count: 8,
+                                    color: '#ffffff',
+                                    palette: ['#ffffff', '#e0f2fe', '#dbeafe'],
+                                    speed: 1.0,
+                                    life: 45,
+                                    size: 2.0,
+                                    gravity: 0.02, // Gentle fall
+                                    friction: 0.96,
+                                    fade: true
+                                });
+                            }
+                            if (emailLevel >= 5) {
+                                createColdSplash(p.x, p.y, p.damage * 0.45, {
+                                    radius: 120,
+                                    slowDuration: 150,
+                                    ignoredTarget: e,
+                                    angle: p.angle
+                                });
+                            }
                         }
                         
                         if (p.type === 'offer' && player.weapons.offer.level >= 2) {
@@ -1929,81 +2340,20 @@
                 }
             }
 
-            try {
-                for (let i = lightnings.length - 1; i >= 0; i--) {
-                    let l = lightnings[i];
-                    l.life -= timeScale;
-                    if (Math.max(l.x1, l.x2) > camera.x && Math.min(l.x1, l.x2) < camera.x + canvas.width &&
-                        Math.max(l.y1, l.y2) > camera.y && Math.min(l.y1, l.y2) < camera.y + canvas.height) {
-                        ctx.save();
-                        const isMini = l.type === 'mini';
-                        const intensity = Math.max(0.05, l.life / (l.maxLife || 1));
-                        const glowColor = isMini ? '#60a5fa' : '#fde68a';
-                        const outerColor = isMini ? 'rgba(147, 197, 253, 0.9)' : 'rgba(253, 224, 71, 0.95)';
-                        const midColor = isMini ? '#bfdbfe' : '#fff5cc';
-                        const coreColor = isMini ? '#e0f2fe' : '#ffffff';
-                        ctx.shadowBlur = (isMini ? 35 : 70) * intensity;
-                        ctx.shadowColor = glowColor;
-                        ctx.lineCap = 'round';
-                        ctx.globalAlpha = 0.8 + intensity * 0.2;
-
-                        const fallbackPoints = [
-                            { x: l.x1, y: l.y1 },
-                            { x: (l.x1 + l.x2) / 2, y: (l.y1 + l.y2) / 2 },
-                            { x: l.x2, y: l.y2 }
-                        ];
-                        const layerSet = (l.layers && l.layers.length) ? l.layers : [{ points: l.points || fallbackPoints, thickness: l.thickness || 4, opacity: 1 }];
-                        const drawStroke = (pts) => {
-                            if (!pts || pts.length < 2) return;
-                            ctx.beginPath();
-                            ctx.moveTo(pts[0].x, pts[0].y);
-                            for (let p = 1; p < pts.length; p++) {
-                                ctx.lineTo(pts[p].x, pts[p].y);
-                            }
-                            ctx.stroke();
-                        };
-
-                        layerSet.forEach((layer, idx) => {
-                            const layerPoints = layer.points || fallbackPoints;
-                            const layerThickness = layer.thickness || (l.thickness || 4);
-                            const layerOpacity = (layer.opacity ?? 1) * (0.6 + intensity * 0.4);
-                            ctx.globalAlpha = Math.min(1, layerOpacity);
-
-                            if (idx === 0) {
-                                ctx.strokeStyle = outerColor;
-                                ctx.lineWidth = layerThickness + 2;
-                                drawStroke(layerPoints);
-                                ctx.strokeStyle = midColor;
-                                ctx.lineWidth = layerThickness;
-                                drawStroke(layerPoints);
-                                ctx.strokeStyle = coreColor;
-                                ctx.lineWidth = Math.max(1, layerThickness * 0.5);
-                                drawStroke(layerPoints);
-                            } else {
-                                ctx.strokeStyle = idx % 2 === 0 ? outerColor : midColor;
-                                ctx.lineWidth = Math.max(1, layerThickness * 0.9);
-                                drawStroke(layerPoints);
-                            }
-                        });
-                        ctx.globalAlpha = 1;
-                        ctx.restore();
-
-                        const sparkChance = isMini ? 0.15 : 0.5;
-                        if (Math.random() < sparkChance * timeScale) {
-                            const vx = (Math.random() - 0.5) * (isMini ? 1.4 : 2);
-                            const vy = (Math.random() - 0.2) * (isMini ? 2 : 3) + (isMini ? 0.3 : 1);
-                            particles.push(new Particle(l.x2, l.y2, isMini ? '#93c5fd' : '#facc15', { x: vx, y: vy }, 16, Math.random() * 1.5));
-                        }
-                    }
-                    if (l.life <= 0) {
-                        if (l.type === 'mini' && activeMiniLightnings > 0) activeMiniLightnings--;
-                        lightnings.splice(i, 1);
-                    }
+            // Lightning Update
+            for (let i = lightnings.length - 1; i >= 0; i--) {
+                let l = lightnings[i];
+                l.update(timeScale);
+                
+                // Only draw if on screen
+                if (Math.max(l.x1, l.x2) > camera.x && Math.min(l.x1, l.x2) < camera.x + canvas.width &&
+                    Math.max(l.y1, l.y2) > camera.y && Math.min(l.y1, l.y2) < camera.y + canvas.height) {
+                    l.draw(ctx);
                 }
-            } catch (err) {
-                console.error('Lightning render error', err);
-                lightnings.length = 0;
-                activeMiniLightnings = 0;
+
+                if (l.dead) {
+                    lightnings.splice(i, 1);
+                }
             }
 
             gems.forEach(g => {
